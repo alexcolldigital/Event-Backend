@@ -5,7 +5,7 @@
 
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
-const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const cloudinaryStorage = require('multer-storage-cloudinary');
 
 // Configure Cloudinary
 cloudinary.config({
@@ -18,7 +18,7 @@ cloudinary.config({
  * Create Cloudinary storage for multer
  */
 const createCloudinaryStorage = (folder) => {
-  return new CloudinaryStorage({
+  return cloudinaryStorage({
     cloudinary: cloudinary,
     params: {
       folder: `event-compass/${folder}`,
