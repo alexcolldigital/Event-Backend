@@ -1,0 +1,176 @@
+/**
+ * Booking Model
+ * Handles service and venue bookings
+ */
+
+const mongoose = require('mongoose');
+const { BOOKING_STATUS, PAYMENT_STATUS } = require('../config/constants');
+
+const bookingSchema = new mongoose.Schema(
+  {
+    // Booking Details
+    bookingNumber: {
+      type: String,
+      unique: true,
+      required: true,
+    },
+
+    // Involved Parties
+    client: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+    serviceProvider: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+
+    // Service/Venue Information
+    service: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Service',
+    },
+    venue: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Venue',
+    },
+    event: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Event',
+    },
+
+    // Booking Details
+    bookingType: {
+      type: String,
+      enum: ['service', 'venue'],
+      required: true,
+    },
+    eventDate: {
+      type: Date,
+      required: true,
+    },
+    eventEndDate: Date,
+    eventTime: String,
+
+    // Duration
+    duration: Number, // in hours/days
+    durationUnit: {
+      type: String,
+      enum: ['hours', 'days', 'fixed'],
+      default: 'hours',
+    },
+
+    // Pricing
+    pricing: {
+      basePrice: Number,
+      quantity: Number,
+      unitPrice: Number,
+      subtotal: Number,
+      tax: Number,
+      discount: Number,
+      totalAmount: Number,
+      currency: {
+        type: String,
+        default: 'NGN',
+      },
+    },
+
+    // Guest Information
+    numberOfGuests: Number,
+    specialRequirements: String,
+    clientNotes: String,
+    providerNotes: String,
+    bookingLocation: {
+      country: String,
+      state: String,
+      city: String,
+      lga: String,
+      address: String,
+    },
+
+    // Status
+    status: {
+      type: String,
+      enum: Object.values(BOOKING_STATUS),
+      default: BOOKING_STATUS.PENDING,
+    },
+    bookingDate: {
+      type: Date,
+      default: Date.now,
+    },
+
+    // Payment
+    payment: {
+      status: {
+        type: String,
+        enum: Object.values(PAYMENT_STATUS),
+        default: PAYMENT_STATUS.PENDING,
+      },
+      method: {
+        type: String,
+        enum: ['stripe', 'bank_transfer', 'card', 'cash'],
+      },
+      transactionId: String,
+      paymentDate: Date,
+      refundStatus: {
+        type: String,
+        enum: ['none', 'pending', 'completed'],
+        default: 'none',
+      },
+      refundAmount: Number,
+    },
+
+    // Timeline
+    confirmedDate: Date,
+    completedDate: Date,
+    cancelledDate: Date,
+    cancellationReason: String,
+
+    // Ratings & Reviews
+    rating: {
+      rating: {
+        type: Number,
+        min: 1,
+        max: 5,
+      },
+      review: String,
+      ratedBy: mongoose.Schema.Types.ObjectId,
+      ratedAt: Date,
+    },
+
+    // Metadata
+    reminderSent: Boolean,
+    reminderSentDate: Date,
+  },
+  {
+    timestamps: true,
+  }
+);
+
+/**
+ * Pre-save middleware to generate booking number
+ */
+bookingSchema.pre('save', async function (next) {
+  if (!this.bookingNumber) {
+    const count = await mongoose.model('Booking').countDocuments();
+    this.bookingNumber = `EC-${Date.now()}-${count + 1}`;
+  }
+  next();
+});
+
+/**
+ * Get booking details summary
+ */
+bookingSchema.methods.getBookingSummary = function () {
+  return {
+    bookingNumber: this.bookingNumber,
+    status: this.status,
+    totalAmount: this.pricing.totalAmount,
+    eventDate: this.eventDate,
+    paymentStatus: this.payment.status,
+  };
+};
+
+module.exports = mongoose.model('Booking', bookingSchema);
