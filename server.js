@@ -218,9 +218,12 @@ app.use(errorHandler);
 const DEFAULT_PORT = 5000;
 const PORT = Number(process.env.PORT) || DEFAULT_PORT;
 
+let server = null;
+
 const startServer = (port = PORT) => {
-  const server = app.listen(port, () => {
-    const actualPort = server.address().port;
+  server = app.listen(port, () => {
+    const address = server && server.address();
+    const actualPort = address && typeof address === 'object' ? address.port : port;
     process.env.PORT = String(actualPort);
     console.log(`✅ Event Compass Server is running on port ${actualPort}`);
     console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
@@ -242,23 +245,31 @@ const startServer = (port = PORT) => {
   return server;
 };
 
-const server = startServer(PORT);
+startServer(PORT);
 
 // Handle graceful shutdown
 process.on('SIGTERM', () => {
   console.log('SIGTERM received, shutting down server');
-  server.close(() => {
-    console.log('Server closed');
+  if (server && server.listening) {
+    server.close(() => {
+      console.log('Server closed');
+      process.exit(0);
+    });
+  } else {
     process.exit(0);
-  });
+  }
 });
 
 process.on('SIGINT', () => {
   console.log('SIGINT received, shutting down server');
-  server.close(() => {
-    console.log('Server closed');
+  if (server && server.listening) {
+    server.close(() => {
+      console.log('Server closed');
+      process.exit(0);
+    });
+  } else {
     process.exit(0);
-  });
+  }
 });
 
 // Handle uncaught exceptions
