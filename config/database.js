@@ -23,7 +23,20 @@ const connectDB = async () => {
   }
 
   try {
-    const conn = await mongoose.connect(process.env.MONGODB_URI || process.env.MONGO_URI || process.env.MONGODB_URL || '', {
+    const uri = process.env.MONGODB_URI || process.env.MONGO_URI || process.env.MONGODB_URL;
+
+    if (!uri) {
+      console.error('MongoDB connection failed: missing MongoDB connection string. Set MONGODB_URI, MONGO_URI, or MONGODB_URL.');
+      return null;
+    }
+
+    const trimmedUri = uri.trim();
+    if (!/^mongodb(\+srv)?:\/\//i.test(trimmedUri)) {
+      console.error('MongoDB connection failed: invalid connection string scheme. It must start with "mongodb://" or "mongodb+srv://".');
+      return null;
+    }
+
+    const conn = await mongoose.connect(trimmedUri, {
       serverSelectionTimeoutMS: 15000,
       socketTimeoutMS: 45000,
       family: 4,

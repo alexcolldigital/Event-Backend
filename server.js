@@ -27,6 +27,12 @@ const adminRoutes = require('./routes/adminRoutes');
 // Initialize Express app
 const app = express();
 
+const trustProxy = process.env.TRUST_PROXY === '1' || process.env.TRUST_PROXY === 'true' || process.env.NODE_ENV === 'production';
+if (trustProxy) {
+  app.set('trust proxy', true);
+  console.log('⚙️  Express trust proxy enabled');
+}
+
 const initializeDatabase = async () => {
   const connection = await connectDB();
 
