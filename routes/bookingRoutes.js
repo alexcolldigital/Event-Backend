@@ -11,6 +11,9 @@ const { authenticate } = require('../middleware/auth');
 // Create new booking (private)
 router.post('/', authenticate, bookingController.createBooking);
 
+// Checkout a cart of services (private)
+router.post('/checkout', authenticate, bookingController.checkoutCart);
+
 // Get my bookings as client (private)
 router.get('/client/my-bookings', authenticate, bookingController.getMyClientBookings);
 
@@ -19,6 +22,18 @@ router.get('/provider/my-bookings', authenticate, bookingController.getMyProvide
 
 // Get booking by ID (private)
 router.get('/:id', authenticate, bookingController.getBookingById);
+
+// Create payment session for booking (private)
+router.post('/:id/payment-session', authenticate, bookingController.createBookingPaymentSession);
+
+// Mark booking payment as successful and escrowed (private)
+router.post('/:id/payment-success', authenticate, bookingController.markBookingPaymentSuccess);
+
+// Release escrow funds to the provider (private - provider only)
+router.patch('/:id/release-escrow', authenticate, bookingController.releaseEscrow);
+
+// Raise a dispute on escrow funds (private)
+router.patch('/:id/dispute-escrow', authenticate, bookingController.disputeEscrow);
 
 // Confirm booking (private - provider only)
 router.patch('/:id/confirm', authenticate, bookingController.confirmBooking);

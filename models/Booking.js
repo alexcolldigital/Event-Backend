@@ -13,6 +13,10 @@ const bookingSchema = new mongoose.Schema(
       type: String,
       unique: true,
       required: true,
+      default: function () {
+        const suffix = Math.random().toString(36).slice(2, 8).toUpperCase();
+        return `EC-${Date.now()}-${suffix}`;
+      },
     },
 
     // Involved Parties
@@ -122,6 +126,40 @@ const bookingSchema = new mongoose.Schema(
       refundAmount: Number,
     },
 
+    escrow: {
+      enabled: {
+        type: Boolean,
+        default: false,
+      },
+      releaseTime: {
+        type: String,
+        enum: ['immediate', 'after_customer_confirmation', '24_hours', '48_hours', 'custom'],
+        default: 'after_customer_confirmation',
+      },
+      releaseHours: {
+        type: Number,
+        default: 24,
+      },
+      disputePolicy: {
+        type: String,
+        enum: ['standard', 'mediation', 'marketplace'],
+        default: 'standard',
+      },
+      status: {
+        type: String,
+        enum: ['active', 'inactive'],
+        default: 'inactive',
+      },
+      releaseStatus: {
+        type: String,
+        enum: ['pending', 'held', 'released', 'disputed'],
+        default: 'pending',
+      },
+      holdAmount: Number,
+      holdDate: Date,
+      refundPolicy: String,
+    },
+
     // Timeline
     confirmedDate: Date,
     completedDate: Date,
@@ -149,16 +187,6 @@ const bookingSchema = new mongoose.Schema(
   }
 );
 
-/**
- * Pre-save middleware to generate booking number
- */
-bookingSchema.pre('save', async function (next) {
-  if (!this.bookingNumber) {
-    const count = await mongoose.model('Booking').countDocuments();
-    this.bookingNumber = `EC-${Date.now()}-${count + 1}`;
-  }
-  next();
-});
 
 /**
  * Get booking details summary

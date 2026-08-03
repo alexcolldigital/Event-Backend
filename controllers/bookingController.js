@@ -9,6 +9,9 @@ const { asyncHandler } = require('../middleware/errorHandler');
 const { BOOKING_STATUS, PAYMENT_STATUS } = require('../config/constants');
 const { sendBookingConfirmationEmail } = require('../utils/email');
 const { isBookingWithinCoverage } = require('../utils/locationMatcher');
+const { buildCartCheckoutPayloads } = require('../utils/cartCheckout');
+const { buildCheckoutSessionPayload } = require('../utils/payment');
+const { normalizeEscrowOptions, getEscrowRefundDecision, releaseEscrowFunds, markEscrowDisputed } = require('../utils/escrow');
 
 /**
  * Create new booking
@@ -27,6 +30,7 @@ const createBooking = asyncHandler(async (req, res) => {
     specialRequirements,
     clientNotes,
     bookingLocation,
+    escrow: escrowInput,
   } = req.body;
 
   if (!eventDate || (!serviceId && !venueId)) {
@@ -82,7 +86,11 @@ const createBooking = asyncHandler(async (req, res) => {
   const tax = pricing.subtotal ? pricing.subtotal * 0.075 : 0; // 7.5% tax
   const totalAmount = pricing.subtotal + tax;
 
+  const bookingNumber = `EC-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+  const escrow = normalizeEscrowOptions(escrowInput);
+
   let booking = new Booking({
+    bookingNumber,
     client: req.userId,
     serviceProvider,
     service: serviceId,
@@ -102,6 +110,7 @@ const createBooking = asyncHandler(async (req, res) => {
       tax,
       totalAmount,
     },
+    escrow,
     status: BOOKING_STATUS.PENDING,
   });
 
@@ -111,7 +120,115 @@ const createBooking = asyncHandler(async (req, res) => {
   res.status(201).json({
     success: true,
     message: 'Booking created successfully',
-    booking,
+    booking: {
+      ...booking.toObject(),
+      escrow: booking.escrow,
+    },
+  });
+});
+
+/**
+ * Create multiple bookings from a cart checkout payload
+ * POST /api/bookings/checkout
+ */
+const checkoutCart = asyncHandler(async (req, res) => {
+  const { cartItems = [], bookingDetails = {} } = req.body;
+
+  const payloads = buildCartCheckoutPayloads({
+    userId: req.userId,
+    bookingDetails,
+    cartItems,
+  });
+
+  const createdBookings = [];
+
+  for (const payload of payloads) {
+    const { serviceId, venueId, eventId, eventDate, eventEndDate, eventTime, duration, numberOfGuests, specialRequirements, clientNotes, bookingLocation, escrow: escrowInput } = payload;
+
+    if (!eventDate || (!serviceId && !venueId)) {
+      continue;
+    }
+
+    let pricing = {};
+    let serviceProvider = null;
+    let bookingType = serviceId ? 'service' : 'venue';
+
+    if (serviceId) {
+      const Service = require('../models/Service');
+      const service = await Service.findById(serviceId);
+      if (!service) {
+        continue;
+      }
+
+      const serviceCoverage = service.coverageArea || {};
+      if (!isBookingWithinCoverage(serviceCoverage, bookingLocation || {})) {
+        continue;
+      }
+
+      serviceProvider = service.provider;
+      pricing = {
+        basePrice: service.pricing.basePrice,
+        quantity: numberOfGuests || 1,
+        unitPrice: service.pricing.basePrice,
+        subtotal: service.pricing.basePrice * (numberOfGuests || 1),
+      };
+    } else {
+      const Venue = require('../models/Venue');
+      const venue = await Venue.findById(venueId);
+      if (!venue) {
+        continue;
+      }
+      serviceProvider = venue.owner;
+      pricing = {
+        basePrice: venue.rentalPrice.daily || venue.rentalPrice.hourly,
+        quantity: duration || 1,
+        unitPrice: venue.rentalPrice.daily || venue.rentalPrice.hourly,
+        subtotal: (venue.rentalPrice.daily || venue.rentalPrice.hourly) * (duration || 1),
+      };
+    }
+
+    const tax = pricing.subtotal ? pricing.subtotal * 0.075 : 0;
+    const totalAmount = pricing.subtotal + tax;
+
+    const bookingNumber = `EC-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    const escrow = normalizeEscrowOptions(escrowInput);
+
+    const booking = new Booking({
+      bookingNumber,
+      client: req.userId,
+      serviceProvider,
+      service: serviceId,
+      venue: venueId,
+      event: eventId,
+      bookingType,
+      eventDate,
+      eventEndDate,
+      eventTime,
+      duration,
+      numberOfGuests,
+      specialRequirements,
+      clientNotes,
+      bookingLocation,
+      pricing: {
+        ...pricing,
+        tax,
+        totalAmount,
+      },
+      escrow,
+      status: BOOKING_STATUS.PENDING,
+    });
+
+    await booking.save();
+    createdBookings.push(await booking.populate('client serviceProvider service venue'));
+  }
+
+  res.status(201).json({
+    success: true,
+    message: createdBookings.length > 0 ? 'Cart checked out successfully' : 'No bookings were created',
+    bookings: createdBookings.map((booking) => ({
+      ...booking.toObject(),
+      escrow: booking.escrow,
+    })),
   });
 });
 
@@ -134,11 +251,29 @@ const getBookingById = asyncHandler(async (req, res) => {
   }
 
   // Check authorization
-  if (
-    booking.client.toString() !== req.userId &&
-    booking.serviceProvider._id.toString() !== req.userId &&
-    req.user.role !== 'admin'
-  ) {
+  const clientId = booking.client?._id?.toString() || booking.client?.toString();
+  const serviceProviderId = booking.serviceProvider?._id?.toString() || booking.serviceProvider?.toString();
+  const serviceOwnerId = booking.service?.provider?._id?.toString() || booking.service?.provider?.toString();
+  const venueOwnerId = booking.venue?.owner?._id?.toString() || booking.venue?.owner?.toString();
+
+  const isClientOwner = clientId === req.userId;
+  const isServiceProviderOwner =
+    serviceProviderId === req.userId ||
+    serviceOwnerId === req.userId ||
+    venueOwnerId === req.userId;
+
+  if (!isClientOwner && !isServiceProviderOwner && req.user.role !== 'admin') {
+    // Debugging: log mismatch details to help trace 403 failures
+    console.warn('Authorization failed for getBookingById', {
+      reqUserId: req.userId,
+      reqUserRole: req.user?.role,
+      bookingId: booking._id?.toString(),
+      clientId,
+      serviceProviderId,
+      serviceOwnerId,
+      venueOwnerId,
+    });
+
     return res.status(403).json({
       success: false,
       message: 'Not authorized to view this booking',
@@ -147,6 +282,129 @@ const getBookingById = asyncHandler(async (req, res) => {
 
   res.status(200).json({
     success: true,
+    booking,
+  });
+});
+
+/**
+ * Create payment session for a booking
+ * POST /api/bookings/:id/payment-session
+ */
+const createBookingPaymentSession = asyncHandler(async (req, res) => {
+  const booking = await Booking.findById(req.params.id)
+    .populate('service')
+    .populate('venue');
+
+  if (!booking) {
+    return res.status(404).json({
+      success: false,
+      message: 'Booking not found',
+    });
+  }
+
+  if (booking.client.toString() !== req.userId) {
+    return res.status(403).json({
+      success: false,
+      message: 'Not authorized to pay for this booking',
+    });
+  }
+
+  if (booking.payment.status === PAYMENT_STATUS.COMPLETED) {
+    return res.status(400).json({
+      success: false,
+      message: 'Booking payment is already completed',
+    });
+  }
+
+  if (booking.status === BOOKING_STATUS.PENDING) {
+    return res.status(400).json({
+      success: false,
+      message: 'Booking must be confirmed by the service provider before payment can be made',
+    });
+  }
+
+  if (booking.status === BOOKING_STATUS.CANCELLED) {
+    return res.status(400).json({
+      success: false,
+      message: 'Cannot pay for a cancelled booking',
+    });
+  }
+
+  const origin =
+    req.body.origin ||
+    process.env.EXPO_PUBLIC_APP_URL ||
+    process.env.FRONTEND_URL ||
+    `${req.protocol}://${req.get('host')}`;
+
+  const sessionPayload = buildCheckoutSessionPayload({ booking, origin });
+
+  try {
+    const session = await require('stripe')(process.env.STRIPE_SECRET_KEY).checkout.sessions.create(
+      sessionPayload
+    );
+
+    booking.payment.method = 'stripe';
+    booking.payment.transactionId = session.id;
+    await booking.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Payment session created successfully',
+      session,
+      booking,
+    });
+  } catch (error) {
+    console.error('Error creating checkout session:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create payment session. Please try again later.',
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * Mark a booking payment as successful and place it in escrow
+ * POST /api/bookings/:id/payment-success
+ */
+const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
+  const booking = await Booking.findById(req.params.id);
+
+  if (!booking) {
+    return res.status(404).json({
+      success: false,
+      message: 'Booking not found',
+    });
+  }
+
+  if (booking.client.toString() !== req.userId) {
+    return res.status(403).json({
+      success: false,
+      message: 'Not authorized to finalize this payment',
+    });
+  }
+
+  if (booking.payment.status === PAYMENT_STATUS.COMPLETED) {
+    return res.status(200).json({
+      success: true,
+      message: 'Booking payment already completed',
+      booking,
+    });
+  }
+
+  booking.payment.status = PAYMENT_STATUS.COMPLETED;
+  booking.payment.paymentDate = new Date();
+  booking.payment.method = booking.payment.method || 'stripe';
+  booking.escrow.enabled = booking.escrow?.enabled ?? true;
+  booking.escrow.status = booking.escrow?.enabled ? 'active' : 'inactive';
+  booking.escrow.releaseStatus = 'held';
+  booking.escrow.holdAmount = booking.pricing?.totalAmount || 0;
+  booking.escrow.holdDate = new Date();
+  await booking.save();
+
+  res.status(200).json({
+    success: true,
+    message: 'Booking payment secured in escrow',
     booking,
   });
 });
@@ -304,8 +562,19 @@ const cancelBooking = asyncHandler(async (req, res) => {
   booking.cancelledDate = new Date();
   booking.cancellationReason = reason;
 
-  // Handle refund if payment was made
-  if (booking.payment.status === PAYMENT_STATUS.COMPLETED) {
+  // Handle escrow refund if payment was made and escrow is active
+  if (booking.payment.status === PAYMENT_STATUS.COMPLETED && booking.escrow?.enabled) {
+    const refundDecision = getEscrowRefundDecision({
+      amount: booking.pricing?.totalAmount || 0,
+      eventDate: booking.eventDate,
+      cancelledAt: new Date(),
+      enabled: true,
+    });
+
+    booking.payment.refundStatus = refundDecision.refundAmount > 0 ? 'pending' : 'none';
+    booking.payment.refundAmount = refundDecision.refundAmount;
+    booking.escrow.refundPolicy = refundDecision.reason;
+  } else if (booking.payment.status === PAYMENT_STATUS.COMPLETED) {
     booking.payment.refundStatus = 'pending';
   }
 
@@ -341,6 +610,14 @@ const completeBooking = asyncHandler(async (req, res) => {
 
   booking.status = BOOKING_STATUS.COMPLETED;
   booking.completedDate = new Date();
+
+  if (booking.payment.status === PAYMENT_STATUS.COMPLETED && booking.escrow?.enabled) {
+    booking.payment.refundStatus = 'none';
+    booking.payment.refundAmount = 0;
+    booking.escrow.releaseStatus = 'released';
+    booking.escrow.releaseDate = new Date();
+  }
+
   await booking.save();
 
   res.status(200).json({
@@ -350,12 +627,73 @@ const completeBooking = asyncHandler(async (req, res) => {
   });
 });
 
+/**
+ * Release escrow funds to the provider
+ * PATCH /api/bookings/:id/release-escrow
+ */
+const releaseEscrow = asyncHandler(async (req, res) => {
+  const booking = await Booking.findById(req.params.id);
+
+  if (!booking) {
+    return res.status(404).json({ success: false, message: 'Booking not found' });
+  }
+
+  if (booking.serviceProvider.toString() !== req.userId) {
+    return res.status(403).json({ success: false, message: 'Not authorized to release escrow' });
+  }
+
+  if (!booking.escrow?.enabled || booking.escrow?.releaseStatus === 'released') {
+    return res.status(400).json({ success: false, message: 'Escrow is not active for this booking' });
+  }
+
+  booking.escrow = releaseEscrowFunds({ escrow: booking.escrow, releasedAt: new Date() });
+  await booking.save();
+
+  res.status(200).json({ success: true, message: 'Escrow released to the provider', booking });
+});
+
+/**
+ * Raise a dispute for escrow funds
+ * PATCH /api/bookings/:id/dispute-escrow
+ */
+const disputeEscrow = asyncHandler(async (req, res) => {
+  const booking = await Booking.findById(req.params.id);
+
+  if (!booking) {
+    return res.status(404).json({ success: false, message: 'Booking not found' });
+  }
+
+  if (
+    booking.client.toString() !== req.userId &&
+    booking.serviceProvider.toString() !== req.userId
+  ) {
+    return res.status(403).json({ success: false, message: 'Not authorized to dispute escrow' });
+  }
+
+  const { reason } = req.body;
+
+  booking.escrow = markEscrowDisputed({
+    escrow: booking.escrow,
+    initiatedBy: booking.client.toString() === req.userId ? 'client' : 'provider',
+    reason: reason || 'Escrow dispute raised',
+    disputedAt: new Date(),
+  });
+  await booking.save();
+
+  res.status(200).json({ success: true, message: 'Escrow dispute opened', booking });
+});
+
 module.exports = {
   createBooking,
+  checkoutCart,
   getBookingById,
   getMyClientBookings,
   getMyProviderBookings,
   confirmBooking,
   cancelBooking,
   completeBooking,
+  createBookingPaymentSession,
+  markBookingPaymentSuccess,
+  releaseEscrow,
+  disputeEscrow,
 };

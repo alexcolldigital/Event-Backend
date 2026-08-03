@@ -3,7 +3,8 @@
  * Entry point for the Express.js application
  */
 
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const express = require('express');
 const mongoose = require('mongoose');
@@ -185,15 +186,24 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-const requireDatabase = (req, res, next) => {
-  if (mongoose.connection.readyState !== 1) {
-    return res.status(503).json({
-      success: false,
-      message: 'Database is not connected. Please check MongoDB configuration.',
-    });
+const requireDatabase = async (req, res, next) => {
+  if (mongoose.connection.readyState === 1) {
+    return next();
   }
 
-  next();
+  try {
+    const connection = await connectDB();
+    if (connection && mongoose.connection.readyState === 1) {
+      return next();
+    }
+  } catch (error) {
+    console.error('Database retry failed:', error.message);
+  }
+
+  return res.status(503).json({
+    success: false,
+    message: 'Database is not connected. Please check MongoDB configuration.',
+  });
 };
 
 // API Routes

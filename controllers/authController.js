@@ -250,19 +250,36 @@ const getCurrentUser = asyncHandler(async (req, res) => {
  */
 const updateProfile = asyncHandler(async (req, res) => {
   const userId = req.userId;
-  const { firstName, lastName, phoneNumber, bio, address } = req.body;
+  const { firstName, lastName, email, phoneNumber, bio, address, businessName, businessDescription, preferences } = req.body;
 
-  const user = await User.findByIdAndUpdate(
-    userId,
-    {
-      firstName,
-      lastName,
-      phoneNumber,
-      bio,
-      address,
-    },
-    { new: true, runValidators: true }
-  );
+  const user = await User.findById(userId);
+  if (!user) {
+    return res.status(404).json({ success: false, message: 'User not found' });
+  }
+
+  if (email && email !== user.email) {
+    const existingUser = await User.findOne({ email });
+    if (existingUser && existingUser._id.toString() !== userId) {
+      return res.status(400).json({ success: false, message: 'Email is already in use' });
+    }
+    user.email = email;
+  }
+
+  if (firstName !== undefined) user.firstName = firstName;
+  if (lastName !== undefined) user.lastName = lastName;
+  if (phoneNumber !== undefined) user.phoneNumber = phoneNumber;
+  if (bio !== undefined) user.bio = bio;
+  if (address !== undefined) user.address = address;
+  if (businessName !== undefined) user.businessName = businessName;
+  if (businessDescription !== undefined) user.businessDescription = businessDescription;
+  if (preferences !== undefined && typeof preferences === 'object') {
+    user.preferences = {
+      ...user.preferences,
+      ...preferences,
+    };
+  }
+
+  await user.save();
 
   res.status(200).json({
     success: true,

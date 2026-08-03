@@ -3,7 +3,32 @@
  * Handles payment processing with Stripe
  */
 
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const stripe = process.env.STRIPE_SECRET_KEY
+  ? require('stripe')(process.env.STRIPE_SECRET_KEY)
+  : null;
+
+const buildCheckoutSessionPayload = ({ booking, origin }) => ({
+  mode: 'payment',
+  line_items: [
+    {
+      price_data: {
+        currency: 'ngn',
+        product_data: {
+          name: booking?.service?.name || 'Event Compass booking',
+          description: `Booking ${booking?.bookingNumber || booking?._id}`,
+        },
+        unit_amount: Math.round((booking?.pricing?.totalAmount || 0) * 100),
+      },
+      quantity: 1,
+    },
+  ],
+  success_url: `${origin}/payment-result?bookingId=${booking?._id}&status=success`,
+  cancel_url: `${origin}/payment-result?bookingId=${booking?._id}&status=cancelled`,
+  metadata: {
+    bookingId: booking?._id,
+    bookingNumber: booking?.bookingNumber,
+  },
+});
 
 /**
  * Create payment intent
@@ -163,4 +188,5 @@ module.exports = {
   createSetupIntent,
   chargeCustomer,
   handleWebhookEvent,
+  buildCheckoutSessionPayload,
 };

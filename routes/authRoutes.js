@@ -61,7 +61,13 @@ router.put(
   [
     body('firstName').optional().notEmpty(),
     body('lastName').optional().notEmpty(),
+    body('email').optional().isEmail().withMessage('Valid email is required'),
     body('phoneNumber').optional().notEmpty(),
+    body('businessName').optional().notEmpty(),
+    body('businessDescription').optional().isString(),
+    body('bio').optional().isString(),
+    body('preferences.notifications').optional().isBoolean(),
+    body('preferences.newsletters').optional().isBoolean(),
   ],
   validateRequest,
   authController.updateProfile

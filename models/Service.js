@@ -100,6 +100,12 @@ const serviceSchema = new mongoose.Schema(
         type: Boolean,
         default: true,
       },
+      status: {
+        type: String,
+        enum: ['Available', 'Busy', 'Temporarily unavailable'],
+        default: 'Available',
+      },
+      duration: String,
       leadTime: Number, // in days
       advanceBooking: Number, // in days
       maxBookingsPerMonth: Number,
