@@ -792,6 +792,7 @@ module.exports = {
   getMyClientBookings,
   getMyProviderBookings,
   confirmBooking,
+  rejectBooking,
   cancelBooking,
   completeBooking,
   createBookingPaymentSession,
