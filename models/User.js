@@ -158,6 +158,16 @@ const userSchema = new mongoose.Schema(
       default: false,
     },
     blockReason: String,
+    strikeCount: {
+      type: Number,
+      default: 0,
+    },
+    isSuspended: {
+      type: Boolean,
+      default: false,
+    },
+    suspensionReason: String,
+    suspendedAt: Date,
 
     // Preferences
     preferences: {

@@ -36,7 +36,7 @@ describe('escrow policy helpers', () => {
     expect(summary.disputeLabel).toBe('Standard dispute handling');
   });
 
-  it('returns a full refund when cancelling far ahead of the event and a partial refund closer to the event', () => {
+  it('returns a full refund when cancelling far ahead of the event and a partial refund for a booking cancelled several days before the event', () => {
     const fullRefund = getEscrowRefundDecision({
       amount: 50000,
       eventDate: new Date('2026-09-20T10:00:00Z'),
@@ -47,7 +47,7 @@ describe('escrow policy helpers', () => {
     const partialRefund = getEscrowRefundDecision({
       amount: 50000,
       eventDate: new Date('2026-09-20T10:00:00Z'),
-      cancelledAt: new Date('2026-09-19T10:00:00Z'),
+      cancelledAt: new Date('2026-09-17T10:00:00Z'),
       enabled: true,
     });
 
@@ -55,6 +55,24 @@ describe('escrow policy helpers', () => {
     expect(fullRefund.refundPercentage).toBe(100);
     expect(partialRefund.refundAmount).toBe(25000);
     expect(partialRefund.refundPercentage).toBe(50);
+  });
+
+  it('uses configured refund tiers and no-refund rules for last-minute cancellations', () => {
+    const noRefund = getEscrowRefundDecision({
+      amount: 50000,
+      eventDate: new Date('2026-09-20T10:00:00Z'),
+      cancelledAt: new Date('2026-09-20T08:00:00Z'),
+      enabled: true,
+      policy: {
+        fullRefundDays: 7,
+        partialRefundDays: 2,
+        noRefundDays: 1,
+      },
+    });
+
+    expect(noRefund.refundAmount).toBe(0);
+    expect(noRefund.refundPercentage).toBe(0);
+    expect(noRefund.reason).toContain('No refund');
   });
 
   it('transitions escrow to released or disputed states when requested', () => {

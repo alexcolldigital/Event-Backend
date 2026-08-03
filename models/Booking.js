@@ -114,13 +114,13 @@ const bookingSchema = new mongoose.Schema(
       },
       method: {
         type: String,
-        enum: ['stripe', 'bank_transfer', 'card', 'cash'],
+        enum: ['stripe', 'bank_transfer', 'card', 'cash', 'paystack', 'flutterwave'],
       },
       transactionId: String,
       paymentDate: Date,
       refundStatus: {
         type: String,
-        enum: ['none', 'pending', 'completed'],
+        enum: ['none', 'pending', 'completed', 'failed'],
         default: 'none',
       },
       refundAmount: Number,
@@ -147,7 +147,7 @@ const bookingSchema = new mongoose.Schema(
       },
       status: {
         type: String,
-        enum: ['active', 'inactive'],
+        enum: ['active', 'inactive', 'held', 'disputed'],
         default: 'inactive',
       },
       releaseStatus: {
@@ -158,12 +158,42 @@ const bookingSchema = new mongoose.Schema(
       holdAmount: Number,
       holdDate: Date,
       refundPolicy: String,
+      vendorAcceptDeadline: Date,
+      autoReleaseAt: Date,
+      disputeRaisedAt: Date,
+      disputeReason: String,
+      disputedBy: String,
+      disputeEvidence: [String],
+      disputeOutcome: {
+        type: String,
+        enum: ['refund_customer', 'pay_vendor', 'split', 'none'],
+        default: 'none',
+      },
+      payoutStatus: {
+        type: String,
+        enum: ['pending', 'processing', 'completed', 'failed'],
+        default: 'pending',
+      },
+      payoutAmount: Number,
+      payoutCurrency: {
+        type: String,
+        default: 'NGN',
+      },
+      payoutReference: String,
+      payoutDate: Date,
+      releaseReason: String,
+      clearedChat: {
+        type: Boolean,
+        default: false,
+      },
     },
 
     // Timeline
     confirmedDate: Date,
     completedDate: Date,
     cancelledDate: Date,
+    vendorAcceptDeadline: Date,
+    autoReleaseAt: Date,
     cancellationReason: String,
 
     // Ratings & Reviews

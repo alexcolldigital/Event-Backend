@@ -5,13 +5,16 @@
 
 const Booking = require('../models/Booking');
 const Payment = require('../models/Payment');
+const Payout = require('../models/Payout');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { BOOKING_STATUS, PAYMENT_STATUS } = require('../config/constants');
 const { sendBookingConfirmationEmail } = require('../utils/email');
 const { isBookingWithinCoverage } = require('../utils/locationMatcher');
 const { buildCartCheckoutPayloads } = require('../utils/cartCheckout');
-const { buildCheckoutSessionPayload } = require('../utils/payment');
+const { buildCheckoutSessionPayload, refundPayment } = require('../utils/payment');
+const { initializeEscrowCheckout } = require('../utils/gatewayFallback');
 const { normalizeEscrowOptions, getEscrowRefundDecision, releaseEscrowFunds, markEscrowDisputed } = require('../utils/escrow');
+const { getEscrowConfig } = require('../utils/platformSettings');
 
 /**
  * Create new booking
@@ -87,7 +90,13 @@ const createBooking = asyncHandler(async (req, res) => {
   const totalAmount = pricing.subtotal + tax;
 
   const bookingNumber = `EC-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-  const escrow = normalizeEscrowOptions(escrowInput);
+  const escrowConfig = await getEscrowConfig();
+  const escrow = normalizeEscrowOptions({
+    ...escrowInput,
+    enabled: true,
+  });
+
+  const vendorAcceptDeadline = new Date(Date.now() + escrowConfig.escrowVendorAcceptWindowHours * 60 * 60 * 1000);
 
   let booking = new Booking({
     bookingNumber,
@@ -110,12 +119,37 @@ const createBooking = asyncHandler(async (req, res) => {
       tax,
       totalAmount,
     },
-    escrow,
+    escrow: {
+      ...escrow,
+      status: 'held',
+      releaseStatus: 'held',
+      vendorAcceptDeadline,
+    },
     status: BOOKING_STATUS.PENDING,
   });
 
   await booking.save();
   booking = await booking.populate('client serviceProvider service venue');
+
+  const origin =
+    req.body.origin ||
+    process.env.EXPO_PUBLIC_APP_URL ||
+    process.env.FRONTEND_URL ||
+    `${req.protocol}://${req.get('host')}`;
+
+  const checkoutOptions = await initializeEscrowCheckout({
+    amount: booking.pricing.totalAmount,
+    email: req.user.email || req.user?.email,
+    metadata: {
+      bookingId: booking._id,
+      bookingNumber: booking.bookingNumber,
+    },
+    callbackUrl: `${origin}/payment-result?bookingId=${booking._id}`,
+  });
+
+  booking.payment.method = checkoutOptions.gateway;
+  booking.payment.transactionId = checkoutOptions.transactionReference;
+  await booking.save();
 
   res.status(201).json({
     success: true,
@@ -123,6 +157,7 @@ const createBooking = asyncHandler(async (req, res) => {
     booking: {
       ...booking.toObject(),
       escrow: booking.escrow,
+      checkoutUrl: checkoutOptions.checkoutUrl,
     },
   });
 });
@@ -316,7 +351,7 @@ const createBookingPaymentSession = asyncHandler(async (req, res) => {
     });
   }
 
-  if (booking.status === BOOKING_STATUS.PENDING) {
+  if (booking.status === BOOKING_STATUS.PENDING && booking.escrow?.status !== 'held') {
     return res.status(400).json({
       success: false,
       message: 'Booking must be confirmed by the service provider before payment can be made',
@@ -327,6 +362,13 @@ const createBookingPaymentSession = asyncHandler(async (req, res) => {
     return res.status(400).json({
       success: false,
       message: 'Cannot pay for a cancelled booking',
+    });
+  }
+
+  if (booking.payment.status === PAYMENT_STATUS.PENDING && booking.escrow?.releaseStatus === 'disputed') {
+    return res.status(400).json({
+      success: false,
+      message: 'Cannot create payment session for bookings with disputed escrow',
     });
   }
 
@@ -396,10 +438,13 @@ const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
   booking.payment.paymentDate = new Date();
   booking.payment.method = booking.payment.method || 'stripe';
   booking.escrow.enabled = booking.escrow?.enabled ?? true;
-  booking.escrow.status = booking.escrow?.enabled ? 'active' : 'inactive';
-  booking.escrow.releaseStatus = 'held';
+  booking.escrow.status = booking.escrow?.enabled ? 'held' : 'inactive';
+  booking.escrow.releaseStatus = booking.escrow?.enabled ? 'held' : 'pending';
   booking.escrow.holdAmount = booking.pricing?.totalAmount || 0;
   booking.escrow.holdDate = new Date();
+  booking.escrow.vendorAcceptDeadline =
+    booking.escrow.vendorAcceptDeadline ||
+    new Date(Date.now() + (await getEscrowConfig()).escrowVendorAcceptWindowHours * 60 * 60 * 1000);
   await booking.save();
 
   res.status(200).json({
@@ -478,7 +523,7 @@ const getMyProviderBookings = asyncHandler(async (req, res) => {
 });
 
 /**
- * Confirm booking (provider)
+ * Confirm booking (provider accept)
  * PATCH /api/bookings/:id/confirm
  */
 const confirmBooking = asyncHandler(async (req, res) => {
@@ -505,8 +550,15 @@ const confirmBooking = asyncHandler(async (req, res) => {
     });
   }
 
+  const escrowConfig = await getEscrowConfig();
   booking.status = BOOKING_STATUS.CONFIRMED;
   booking.confirmedDate = new Date();
+  booking.escrow.autoReleaseAt = new Date(
+    new Date(booking.eventDate).getTime() + escrowConfig.escrowAutoReleaseWindowHours * 60 * 60 * 1000
+  );
+  booking.escrow.releaseStatus = booking.escrow?.releaseStatus || 'held';
+  booking.escrow.status = booking.escrow?.enabled ? 'held' : 'inactive';
+
   await booking.save();
 
   // Send confirmation email
@@ -522,6 +574,56 @@ const confirmBooking = asyncHandler(async (req, res) => {
   res.status(200).json({
     success: true,
     message: 'Booking confirmed successfully',
+    booking,
+  });
+});
+
+/**
+ * Reject booking (provider)
+ * PATCH /api/bookings/:id/reject
+ */
+const rejectBooking = asyncHandler(async (req, res) => {
+  const booking = await Booking.findById(req.params.id);
+
+  if (!booking) {
+    return res.status(404).json({
+      success: false,
+      message: 'Booking not found',
+    });
+  }
+
+  if (booking.serviceProvider.toString() !== req.userId) {
+    return res.status(403).json({
+      success: false,
+      message: 'Not authorized to reject this booking',
+    });
+  }
+
+  if (booking.status !== BOOKING_STATUS.PENDING) {
+    return res.status(400).json({
+      success: false,
+      message: 'Can only reject pending bookings',
+    });
+  }
+
+  const { reason } = req.body;
+  booking.status = BOOKING_STATUS.CANCELLED;
+  booking.cancelledDate = new Date();
+  booking.cancellationReason = reason || 'Vendor rejected the booking';
+  booking.escrow.status = 'inactive';
+  booking.escrow.releaseStatus = 'pending';
+  booking.escrow.refundPolicy = 'Full refund due to vendor rejection';
+
+  if (booking.payment.status === PAYMENT_STATUS.COMPLETED && booking.escrow?.enabled) {
+    booking.payment.refundStatus = 'pending';
+    booking.payment.refundAmount = booking.pricing?.totalAmount || 0;
+  }
+
+  await booking.save();
+
+  res.status(200).json({
+    success: true,
+    message: 'Booking rejected and set for refund',
     booking,
   });
 });

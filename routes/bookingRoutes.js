@@ -32,6 +32,9 @@ router.post('/:id/payment-success', authenticate, bookingController.markBookingP
 // Release escrow funds to the provider (private - provider only)
 router.patch('/:id/release-escrow', authenticate, bookingController.releaseEscrow);
 
+// Reject booking (private - provider only)
+router.patch('/:id/reject', authenticate, bookingController.rejectBooking);
+
 // Raise a dispute on escrow funds (private)
 router.patch('/:id/dispute-escrow', authenticate, bookingController.disputeEscrow);
 
