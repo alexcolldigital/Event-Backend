@@ -523,7 +523,7 @@ const getMyProviderBookings = asyncHandler(async (req, res) => {
 });
 
 /**
- * Confirm booking (provider accept)
+ * Confirm booking (provider)
  * PATCH /api/bookings/:id/confirm
  */
 const confirmBooking = asyncHandler(async (req, res) => {
@@ -550,15 +550,8 @@ const confirmBooking = asyncHandler(async (req, res) => {
     });
   }
 
-  const escrowConfig = await getEscrowConfig();
   booking.status = BOOKING_STATUS.CONFIRMED;
   booking.confirmedDate = new Date();
-  booking.escrow.autoReleaseAt = new Date(
-    new Date(booking.eventDate).getTime() + escrowConfig.escrowAutoReleaseWindowHours * 60 * 60 * 1000
-  );
-  booking.escrow.releaseStatus = booking.escrow?.releaseStatus || 'held';
-  booking.escrow.status = booking.escrow?.enabled ? 'held' : 'inactive';
-
   await booking.save();
 
   // Send confirmation email
@@ -574,56 +567,6 @@ const confirmBooking = asyncHandler(async (req, res) => {
   res.status(200).json({
     success: true,
     message: 'Booking confirmed successfully',
-    booking,
-  });
-});
-
-/**
- * Reject booking (provider)
- * PATCH /api/bookings/:id/reject
- */
-const rejectBooking = asyncHandler(async (req, res) => {
-  const booking = await Booking.findById(req.params.id);
-
-  if (!booking) {
-    return res.status(404).json({
-      success: false,
-      message: 'Booking not found',
-    });
-  }
-
-  if (booking.serviceProvider.toString() !== req.userId) {
-    return res.status(403).json({
-      success: false,
-      message: 'Not authorized to reject this booking',
-    });
-  }
-
-  if (booking.status !== BOOKING_STATUS.PENDING) {
-    return res.status(400).json({
-      success: false,
-      message: 'Can only reject pending bookings',
-    });
-  }
-
-  const { reason } = req.body;
-  booking.status = BOOKING_STATUS.CANCELLED;
-  booking.cancelledDate = new Date();
-  booking.cancellationReason = reason || 'Vendor rejected the booking';
-  booking.escrow.status = 'inactive';
-  booking.escrow.releaseStatus = 'pending';
-  booking.escrow.refundPolicy = 'Full refund due to vendor rejection';
-
-  if (booking.payment.status === PAYMENT_STATUS.COMPLETED && booking.escrow?.enabled) {
-    booking.payment.refundStatus = 'pending';
-    booking.payment.refundAmount = booking.pricing?.totalAmount || 0;
-  }
-
-  await booking.save();
-
-  res.status(200).json({
-    success: true,
-    message: 'Booking rejected and set for refund',
     booking,
   });
 });
@@ -792,7 +735,6 @@ module.exports = {
   getMyClientBookings,
   getMyProviderBookings,
   confirmBooking,
-  rejectBooking,
   cancelBooking,
   completeBooking,
   createBookingPaymentSession,
