@@ -9,6 +9,7 @@ const router = express.Router();
 const authController = require('../controllers/authController');
 const { authenticate, authorize } = require('../middleware/auth');
 const { validateRequest } = require('../middleware/validation');
+const { createSingleUploadMiddleware } = require('../utils/fileUpload');
 
 // Register route
 router.post(
@@ -71,6 +72,13 @@ router.put(
   ],
   validateRequest,
   authController.updateProfile
+);
+
+router.post(
+  '/profile/image',
+  authenticate,
+  createSingleUploadMiddleware('profiles', 'profileImage'),
+  authController.uploadProfileImage
 );
 
 // Change password

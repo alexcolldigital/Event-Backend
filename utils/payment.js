@@ -22,8 +22,8 @@ const buildCheckoutSessionPayload = ({ booking, origin }) => ({
       quantity: 1,
     },
   ],
-  success_url: `${origin}/payment-result?bookingId=${booking?._id}&status=success`,
-  cancel_url: `${origin}/payment-result?bookingId=${booking?._id}&status=cancelled`,
+  success_url: `${origin}/bookings/payment-result?bookingId=${booking?._id}&status=success`,
+  cancel_url: `${origin}/bookings/payment-result?bookingId=${booking?._id}&status=cancelled`,
   metadata: {
     bookingId: booking?._id,
     bookingNumber: booking?.bookingNumber,

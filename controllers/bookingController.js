@@ -5,16 +5,16 @@
 
 const Booking = require('../models/Booking');
 const Payment = require('../models/Payment');
-const Payout = require('../models/Payout');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { BOOKING_STATUS, PAYMENT_STATUS } = require('../config/constants');
 const { sendBookingConfirmationEmail } = require('../utils/email');
 const { isBookingWithinCoverage } = require('../utils/locationMatcher');
 const { buildCartCheckoutPayloads } = require('../utils/cartCheckout');
-const { buildCheckoutSessionPayload, refundPayment } = require('../utils/payment');
-const { initializeEscrowCheckout } = require('../utils/gatewayFallback');
+const { buildCheckoutSessionPayload } = require('../utils/payment');
 const { normalizeEscrowOptions, getEscrowRefundDecision, releaseEscrowFunds, markEscrowDisputed } = require('../utils/escrow');
-const { getEscrowConfig } = require('../utils/platformSettings');
+const gateway = require('../utils/gateway');
+const PlatformSetting = require('../models/PlatformSetting');
+const Payout = require('../models/Payout');
 
 /**
  * Create new booking
@@ -90,13 +90,12 @@ const createBooking = asyncHandler(async (req, res) => {
   const totalAmount = pricing.subtotal + tax;
 
   const bookingNumber = `EC-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-  const escrowConfig = await getEscrowConfig();
-  const escrow = normalizeEscrowOptions({
-    ...escrowInput,
-    enabled: true,
-  });
+  const escrow = normalizeEscrowOptions(escrowInput);
 
-  const vendorAcceptDeadline = new Date(Date.now() + escrowConfig.escrowVendorAcceptWindowHours * 60 * 60 * 1000);
+  // vendor accept deadline (default 24 hours, admin-configurable)
+  const vendorAcceptHoursSetting = await PlatformSetting.findOne({ key: 'vendorAcceptHours' });
+  const vendorAcceptHours = (vendorAcceptHoursSetting && Number(vendorAcceptHoursSetting.value)) || 24;
+  const vendorAcceptDeadline = new Date(Date.now() + vendorAcceptHours * 60 * 60 * 1000);
 
   let booking = new Booking({
     bookingNumber,
@@ -119,37 +118,31 @@ const createBooking = asyncHandler(async (req, res) => {
       tax,
       totalAmount,
     },
-    escrow: {
-      ...escrow,
-      status: 'held',
-      releaseStatus: 'held',
-      vendorAcceptDeadline,
-    },
+    escrow,
+    vendorAcceptDeadline,
     status: BOOKING_STATUS.PENDING,
   });
 
   await booking.save();
   booking = await booking.populate('client serviceProvider service venue');
 
+  // Initialize checkout (Paystack primary, Flutterwave fallback)
   const origin =
-    req.body.origin ||
-    process.env.EXPO_PUBLIC_APP_URL ||
-    process.env.FRONTEND_URL ||
-    `${req.protocol}://${req.get('host')}`;
+    req.body.origin || process.env.EXPO_PUBLIC_APP_URL || process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`;
 
-  const checkoutOptions = await initializeEscrowCheckout({
-    amount: booking.pricing.totalAmount,
-    email: req.user.email || req.user?.email,
-    metadata: {
-      bookingId: booking._id,
-      bookingNumber: booking.bookingNumber,
-    },
-    callbackUrl: `${origin}/payment-result?bookingId=${booking._id}`,
-  });
-
-  booking.payment.method = checkoutOptions.gateway;
-  booking.payment.transactionId = checkoutOptions.transactionReference;
-  await booking.save();
+  let checkoutUrl = null;
+  try {
+    const init = await gateway.initializeCheckout({ booking, origin });
+    if (init && init.checkoutUrl) {
+      checkoutUrl = init.checkoutUrl;
+      // record payment method hint
+      booking.payment.method = init.gateway || booking.payment.method;
+      booking.payment.transactionId = init.reference || booking.payment.transactionId;
+      await booking.save();
+    }
+  } catch (err) {
+    console.error('Failed to initialize gateway checkout:', err.message || err);
+  }
 
   res.status(201).json({
     success: true,
@@ -157,8 +150,8 @@ const createBooking = asyncHandler(async (req, res) => {
     booking: {
       ...booking.toObject(),
       escrow: booking.escrow,
-      checkoutUrl: checkoutOptions.checkoutUrl,
     },
+    checkoutUrl,
   });
 });
 
@@ -176,6 +169,7 @@ const checkoutCart = asyncHandler(async (req, res) => {
   });
 
   const createdBookings = [];
+  const checkoutLinks = [];
 
   for (const payload of payloads) {
     const { serviceId, venueId, eventId, eventDate, eventEndDate, eventTime, duration, numberOfGuests, specialRequirements, clientNotes, bookingLocation, escrow: escrowInput } = payload;
@@ -254,7 +248,26 @@ const checkoutCart = asyncHandler(async (req, res) => {
     });
 
     await booking.save();
-    createdBookings.push(await booking.populate('client serviceProvider service venue'));
+    const populatedBooking = await booking.populate('client serviceProvider service venue');
+    createdBookings.push(populatedBooking);
+
+    try {
+      const origin =
+        req.body.origin || process.env.EXPO_PUBLIC_APP_URL || process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`;
+      const init = await gateway.initializeCheckout({ booking: populatedBooking, origin });
+      if (init && init.checkoutUrl) {
+        checkoutLinks.push({
+          bookingId: populatedBooking._id,
+          checkoutUrl: init.checkoutUrl,
+          gateway: init.gateway,
+        });
+        populatedBooking.payment.method = init.gateway || populatedBooking.payment.method;
+        populatedBooking.payment.transactionId = init.reference || populatedBooking.payment.transactionId;
+        await populatedBooking.save();
+      }
+    } catch (err) {
+      console.error('Failed to initialize cart checkout link:', err.message || err);
+    }
   }
 
   res.status(201).json({
@@ -263,7 +276,9 @@ const checkoutCart = asyncHandler(async (req, res) => {
     bookings: createdBookings.map((booking) => ({
       ...booking.toObject(),
       escrow: booking.escrow,
+      checkoutUrl: (checkoutLinks.find((link) => String(link.bookingId) === String(booking._id)) || {}).checkoutUrl || null,
     })),
+    checkouts: checkoutLinks,
   });
 });
 
@@ -351,7 +366,7 @@ const createBookingPaymentSession = asyncHandler(async (req, res) => {
     });
   }
 
-  if (booking.status === BOOKING_STATUS.PENDING && booking.escrow?.status !== 'held') {
+  if (booking.status === BOOKING_STATUS.PENDING) {
     return res.status(400).json({
       success: false,
       message: 'Booking must be confirmed by the service provider before payment can be made',
@@ -362,13 +377,6 @@ const createBookingPaymentSession = asyncHandler(async (req, res) => {
     return res.status(400).json({
       success: false,
       message: 'Cannot pay for a cancelled booking',
-    });
-  }
-
-  if (booking.payment.status === PAYMENT_STATUS.PENDING && booking.escrow?.releaseStatus === 'disputed') {
-    return res.status(400).json({
-      success: false,
-      message: 'Cannot create payment session for bookings with disputed escrow',
     });
   }
 
@@ -438,13 +446,10 @@ const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
   booking.payment.paymentDate = new Date();
   booking.payment.method = booking.payment.method || 'stripe';
   booking.escrow.enabled = booking.escrow?.enabled ?? true;
-  booking.escrow.status = booking.escrow?.enabled ? 'held' : 'inactive';
-  booking.escrow.releaseStatus = booking.escrow?.enabled ? 'held' : 'pending';
+  booking.escrow.status = booking.escrow?.enabled ? 'active' : 'inactive';
+  booking.escrow.releaseStatus = 'held';
   booking.escrow.holdAmount = booking.pricing?.totalAmount || 0;
   booking.escrow.holdDate = new Date();
-  booking.escrow.vendorAcceptDeadline =
-    booking.escrow.vendorAcceptDeadline ||
-    new Date(Date.now() + (await getEscrowConfig()).escrowVendorAcceptWindowHours * 60 * 60 * 1000);
   await booking.save();
 
   res.status(200).json({
@@ -552,6 +557,15 @@ const confirmBooking = asyncHandler(async (req, res) => {
 
   booking.status = BOOKING_STATUS.CONFIRMED;
   booking.confirmedDate = new Date();
+  // set autoReleaseAt (event date + configurable window, default 72 hours)
+  const autoWindowSetting = await PlatformSetting.findOne({ key: 'autoReleaseWindowHours' });
+  const autoWindowHours = (autoWindowSetting && Number(autoWindowSetting.value)) || 72;
+  try {
+    const eventDateMs = booking.eventDate ? new Date(booking.eventDate).getTime() : Date.now();
+    booking.autoReleaseAt = new Date(eventDateMs + autoWindowHours * 60 * 60 * 1000);
+  } catch (e) {
+    booking.autoReleaseAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
+  }
   await booking.save();
 
   // Send confirmation email
@@ -728,6 +742,68 @@ const disputeEscrow = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, message: 'Escrow dispute opened', booking });
 });
 
+/**
+ * Handle Paystack webhook (raw body expected)
+ * POST /api/bookings/webhook/paystack
+ */
+const handlePaystackWebhookRaw = async (req, res) => {
+  try {
+    const crypto = require('crypto');
+    const signature = req.headers['x-paystack-signature'];
+    const rawBody = req.body && req.body.toString ? req.body.toString() : '';
+
+    if (!process.env.PAYSTACK_SECRET || !signature) {
+      console.warn('Paystack webhook missing configuration or signature');
+      return res.status(400).send('Bad Request');
+    }
+
+    const hash = crypto.createHmac('sha512', process.env.PAYSTACK_SECRET).update(rawBody).digest('hex');
+    if (hash !== signature) {
+      console.warn('Invalid paystack webhook signature');
+      return res.status(400).send('Invalid signature');
+    }
+
+    const payload = JSON.parse(rawBody || '{}');
+    const event = payload.event || payload.event; // charge.success etc
+    const data = payload.data || payload.data;
+
+    if (!data) {
+      return res.status(200).send('No data');
+    }
+
+    // Try to read bookingId from metadata
+    const bookingId = (data.metadata && (data.metadata.bookingId || data.metadata.booking_id)) || null;
+    const reference = data.reference || data.id || null;
+    const amount = data.amount ? Number(data.amount) / 100 : null;
+
+    if (!bookingId) {
+      console.warn('Paystack webhook without booking metadata');
+      return res.status(200).send('ignored');
+    }
+
+    const booking = await Booking.findById(bookingId);
+    if (!booking) return res.status(404).send('Booking not found');
+
+    // Only process successful charge events
+    if (payload.event === 'charge.success' || payload.event === 'transfer.success' || (data.status && data.status === 'success')) {
+      booking.payment.status = PAYMENT_STATUS.COMPLETED;
+      booking.payment.transactionId = reference || booking.payment.transactionId;
+      booking.payment.paymentDate = new Date();
+      booking.escrow.enabled = booking.escrow?.enabled ?? true;
+      booking.escrow.status = booking.escrow?.enabled ? 'active' : 'inactive';
+      booking.escrow.releaseStatus = 'held';
+      booking.escrow.holdAmount = amount || booking.pricing?.totalAmount || 0;
+      booking.escrow.holdDate = new Date();
+      await booking.save();
+    }
+
+    return res.status(200).send('ok');
+  } catch (err) {
+    console.error('Paystack webhook processing error', err);
+    return res.status(500).send('error');
+  }
+};
+
 module.exports = {
   createBooking,
   checkoutCart,
@@ -741,4 +817,5 @@ module.exports = {
   markBookingPaymentSuccess,
   releaseEscrow,
   disputeEscrow,
+  handlePaystackWebhookRaw,
 };

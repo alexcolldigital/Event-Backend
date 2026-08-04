@@ -13,10 +13,6 @@ const bookingSchema = new mongoose.Schema(
       type: String,
       unique: true,
       required: true,
-      default: function () {
-        const suffix = Math.random().toString(36).slice(2, 8).toUpperCase();
-        return `EC-${Date.now()}-${suffix}`;
-      },
     },
 
     // Involved Parties
@@ -100,6 +96,18 @@ const bookingSchema = new mongoose.Schema(
       enum: Object.values(BOOKING_STATUS),
       default: BOOKING_STATUS.PENDING,
     },
+    // Vendor acceptance deadline and escrow status
+    vendorAcceptDeadline: Date,
+    autoReleaseAt: Date,
+    escrowStatus: {
+      type: String,
+      enum: ['none', 'held', 'disputed', 'released', 'refunded'],
+      default: 'none',
+    },
+    strikes: {
+      type: Number,
+      default: 0,
+    },
     bookingDate: {
       type: Date,
       default: Date.now,
@@ -114,13 +122,13 @@ const bookingSchema = new mongoose.Schema(
       },
       method: {
         type: String,
-        enum: ['stripe', 'bank_transfer', 'card', 'cash', 'paystack', 'flutterwave'],
+        enum: ['stripe', 'bank_transfer', 'card', 'cash'],
       },
       transactionId: String,
       paymentDate: Date,
       refundStatus: {
         type: String,
-        enum: ['none', 'pending', 'completed', 'failed'],
+        enum: ['none', 'pending', 'completed'],
         default: 'none',
       },
       refundAmount: Number,
@@ -147,7 +155,7 @@ const bookingSchema = new mongoose.Schema(
       },
       status: {
         type: String,
-        enum: ['active', 'inactive', 'held', 'disputed'],
+        enum: ['active', 'inactive'],
         default: 'inactive',
       },
       releaseStatus: {
@@ -158,42 +166,12 @@ const bookingSchema = new mongoose.Schema(
       holdAmount: Number,
       holdDate: Date,
       refundPolicy: String,
-      vendorAcceptDeadline: Date,
-      autoReleaseAt: Date,
-      disputeRaisedAt: Date,
-      disputeReason: String,
-      disputedBy: String,
-      disputeEvidence: [String],
-      disputeOutcome: {
-        type: String,
-        enum: ['refund_customer', 'pay_vendor', 'split', 'none'],
-        default: 'none',
-      },
-      payoutStatus: {
-        type: String,
-        enum: ['pending', 'processing', 'completed', 'failed'],
-        default: 'pending',
-      },
-      payoutAmount: Number,
-      payoutCurrency: {
-        type: String,
-        default: 'NGN',
-      },
-      payoutReference: String,
-      payoutDate: Date,
-      releaseReason: String,
-      clearedChat: {
-        type: Boolean,
-        default: false,
-      },
     },
 
     // Timeline
     confirmedDate: Date,
     completedDate: Date,
     cancelledDate: Date,
-    vendorAcceptDeadline: Date,
-    autoReleaseAt: Date,
     cancellationReason: String,
 
     // Ratings & Reviews

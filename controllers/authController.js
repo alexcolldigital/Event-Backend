@@ -153,8 +153,14 @@ const registerServiceProvider = asyncHandler(async (req, res) => {
       firstName: user.firstName,
       lastName: user.lastName,
       email: user.email,
+      phoneNumber: user.phoneNumber,
       role: user.role,
       businessName: user.businessName,
+      businessDescription: user.businessDescription,
+      profileImage: user.profileImage,
+      isEmailVerified: user.isEmailVerified,
+      isPhoneVerified: user.isPhoneVerified,
+      preferences: user.preferences,
     },
   });
 });
@@ -221,12 +227,20 @@ const loginUser = asyncHandler(async (req, res) => {
       firstName: user.firstName,
       lastName: user.lastName,
       email: user.email,
+      phoneNumber: user.phoneNumber,
       role: user.role,
       businessName: user.businessName,
+      businessDescription: user.businessDescription,
+      profileImage: user.profileImage,
       averageRating: user.averageRating,
       totalBookings: user.totalBookings,
       completedBookings: user.completedBookings,
-      profileImage: user.profileImage,
+      totalReviews: user.totalReviews,
+      isEmailVerified: user.isEmailVerified,
+      isPhoneVerified: user.isPhoneVerified,
+      preferences: user.preferences,
+      bio: user.bio,
+      address: user.address,
     },
   });
 });
@@ -292,6 +306,34 @@ const updateProfile = asyncHandler(async (req, res) => {
  * Change password
  * POST /api/auth/change-password
  */
+const uploadProfileImage = asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const user = await User.findById(userId);
+
+  if (!user) {
+    return res.status(404).json({ success: false, message: 'User not found' });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ success: false, message: 'Profile image is required' });
+  }
+
+  const file = req.file;
+  const profileImage = {
+    url: file.path || file.secure_url || file.url,
+    publicId: file.filename || file.public_id || file.publicId,
+  };
+
+  user.profileImage = profileImage;
+  await user.save();
+
+  res.status(200).json({
+    success: true,
+    message: 'Profile image uploaded successfully',
+    user,
+  });
+});
+
 const changePassword = asyncHandler(async (req, res) => {
   const { currentPassword, newPassword, confirmPassword } = req.body;
 
@@ -408,6 +450,7 @@ module.exports = {
   loginUser,
   getCurrentUser,
   updateProfile,
+  uploadProfileImage,
   changePassword,
   forgotPassword,
   resetPassword,

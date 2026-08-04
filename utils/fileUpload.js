@@ -29,7 +29,7 @@ const createCloudinaryStorage = (folder) => {
 };
 
 /**
- * Create multer upload middleware
+ * Create multer upload middleware for multiple files
  */
 const createUploadMiddleware = (folder, maxFiles = 5) => {
   const storage = createCloudinaryStorage(folder);
@@ -50,6 +50,30 @@ const createUploadMiddleware = (folder, maxFiles = 5) => {
       }
     },
   }).array('images', maxFiles);
+};
+
+/**
+ * Create multer upload middleware for single file
+ */
+const createSingleUploadMiddleware = (folder, fieldName = 'image') => {
+  const storage = createCloudinaryStorage(folder);
+
+  return multer({
+    storage: storage,
+    limits: {
+      fileSize: 10 * 1024 * 1024, // 10MB
+    },
+    fileFilter: (req, file, cb) => {
+      const allowedTypes = /jpeg|jpg|png|gif|webp/;
+      const extname = allowedTypes.test(file.mimetype);
+
+      if (extname) {
+        return cb(null, true);
+      } else {
+        cb(new Error('Only image files are allowed'));
+      }
+    },
+  }).single(fieldName);
 };
 
 /**
@@ -87,6 +111,7 @@ const uploadToCloudinary = async (file, folder) => {
 module.exports = {
   cloudinary,
   createUploadMiddleware,
+  createSingleUploadMiddleware,
   deleteImageFromCloudinary,
   uploadToCloudinary,
 };

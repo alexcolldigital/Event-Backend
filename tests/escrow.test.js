@@ -57,24 +57,6 @@ describe('escrow policy helpers', () => {
     expect(partialRefund.refundPercentage).toBe(50);
   });
 
-  it('uses configured refund tiers and no-refund rules for last-minute cancellations', () => {
-    const noRefund = getEscrowRefundDecision({
-      amount: 50000,
-      eventDate: new Date('2026-09-20T10:00:00Z'),
-      cancelledAt: new Date('2026-09-20T08:00:00Z'),
-      enabled: true,
-      policy: {
-        fullRefundDays: 7,
-        partialRefundDays: 2,
-        noRefundDays: 1,
-      },
-    });
-
-    expect(noRefund.refundAmount).toBe(0);
-    expect(noRefund.refundPercentage).toBe(0);
-    expect(noRefund.reason).toContain('No refund');
-  });
-
   it('transitions escrow to released or disputed states when requested', () => {
     const releasedEscrow = releaseEscrowFunds({
       escrow: {

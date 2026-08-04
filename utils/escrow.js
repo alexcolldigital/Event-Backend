@@ -37,7 +37,7 @@ const getEscrowSummary = (options = {}) => {
   };
 };
 
-const getEscrowRefundDecision = ({ amount, eventDate, cancelledAt, enabled = false, policy = {} } = {}) => {
+const getEscrowRefundDecision = ({ amount, eventDate, cancelledAt, enabled = false } = {}) => {
   if (!enabled || !amount || !eventDate || !cancelledAt) {
     return {
       refundAmount: 0,
@@ -46,43 +46,30 @@ const getEscrowRefundDecision = ({ amount, eventDate, cancelledAt, enabled = fal
     };
   }
 
-  const defaultPolicy = {
-    refundTiers: [
-      { daysBefore: 7, percentage: 100 },
-      { daysBefore: 2, percentage: 50 },
-      { daysBefore: 0, percentage: 0 },
-    ],
-    noRefundHours: 24,
-  };
-
-  const resolvedPolicy = {
-    ...defaultPolicy,
-    ...policy,
-  };
-
   const diffMs = new Date(eventDate).getTime() - new Date(cancelledAt).getTime();
   const diffDays = diffMs / (1000 * 60 * 60 * 24);
-  const diffHours = diffMs / (1000 * 60 * 60);
 
-  if (diffHours < resolvedPolicy.noRefundHours) {
+  if (diffDays >= 7) {
     return {
-      refundAmount: 0,
-      refundPercentage: 0,
-      reason: `No refund because cancellation was within ${resolvedPolicy.noRefundHours} hours of the event`,
+      refundAmount: amount,
+      refundPercentage: 100,
+      reason: 'Full refund because cancellation was more than 7 days before the event',
     };
   }
 
-  const tiers = Array.isArray(resolvedPolicy.refundTiers)
-    ? resolvedPolicy.refundTiers.slice().sort((a, b) => b.daysBefore - a.daysBefore)
-    : defaultPolicy.refundTiers;
-
-  const matchingTier = tiers.find((tier) => diffDays >= tier.daysBefore) || tiers[tiers.length - 1];
-  const refundAmount = Math.round(amount * (matchingTier.percentage / 100));
+  if (diffDays >= 2) {
+    const refundAmount = Math.round(amount * 0.5);
+    return {
+      refundAmount,
+      refundPercentage: 50,
+      reason: 'Half refund because cancellation was within 2-7 days of the event',
+    };
+  }
 
   return {
-    refundAmount,
-    refundPercentage: matchingTier.percentage,
-    reason: `${matchingTier.percentage}% refund because cancellation occurred ${diffDays.toFixed(1)} days before the event`,
+    refundAmount: Math.round(amount * 0.5),
+    refundPercentage: 50,
+    reason: 'Half refund because cancellation was within 48 hours of the event',
   };
 };
 

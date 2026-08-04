@@ -3,6 +3,7 @@
  * Entry point for the Express.js application
  */
 
+const fs = require('fs');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
@@ -23,6 +24,8 @@ const authRoutes = require('./routes/authRoutes');
 const serviceRoutes = require('./routes/serviceRoutes');
 const bookingRoutes = require('./routes/bookingRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const bookingController = require('./controllers/bookingController');
+const scheduler = require('./utils/scheduler');
 
 // Initialize Express app
 const app = express();
@@ -170,6 +173,9 @@ app.use('/api/', limiter);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
+// Paystack webhook (needs raw body for signature verification)
+app.post('/api/bookings/webhook/paystack', express.raw({ type: '*/*' }), bookingController.handlePaystackWebhookRaw);
+
 // Base route
 app.get('/', (req, res) => {
   res.status(200).json({
@@ -218,6 +224,25 @@ app.use('/api/services', requireDatabase, serviceRoutes);
 app.use('/api/bookings', requireDatabase, bookingRoutes);
 app.use('/api/admin', requireDatabase, adminRoutes);
 
+const frontendDistPath = path.join(__dirname, '../frontend/dist');
+const frontendIndexPath = path.join(frontendDistPath, 'index.html');
+
+if (fs.existsSync(frontendDistPath)) {
+  app.use(express.static(frontendDistPath));
+
+  app.use((req, res, next) => {
+    if (req.path.startsWith('/api')) {
+      return next();
+    }
+
+    if (req.accepts('html')) {
+      return res.sendFile(frontendIndexPath);
+    }
+
+    return next();
+  });
+}
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({
@@ -262,6 +287,14 @@ const startServer = (port = PORT) => {
 };
 
 startServer(PORT);
+
+// Start background schedulers (expired acceptances, auto-releases)
+try {
+  scheduler.startSchedulers();
+  console.log('Scheduler started: processExpiredAcceptances and auto-releases');
+} catch (e) {
+  console.warn('Failed to start scheduler', e.message || e);
+}
 
 // Handle graceful shutdown
 process.on('SIGTERM', () => {
