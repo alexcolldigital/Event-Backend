@@ -2,7 +2,9 @@ const Booking = require('../models/Booking');
 const PlatformSetting = require('../models/PlatformSetting');
 const gateway = require('./gateway');
 const Payout = require('../models/Payout');
+const User = require('../models/User');
 const { BOOKING_STATUS, PAYMENT_STATUS } = require('../config/constants');
+const push = require('./pushNotification');
 
 const processExpiredAcceptances = async () => {
   try {
@@ -15,7 +17,6 @@ const processExpiredAcceptances = async () => {
     });
 
     for (const booking of bookings) {
-      // Auto-cancel and refund
       booking.status = BOOKING_STATUS.CANCELLED;
       booking.cancelledDate = new Date();
       booking.cancellationReason = 'Provider did not respond in time';
@@ -38,6 +39,13 @@ const processExpiredAcceptances = async () => {
       }
 
       await booking.save();
+
+      // Push cancellation alert to client
+      try {
+        const client = await User.findById(booking.client);
+        if (client?.fcmToken && client.preferences?.notifications !== false)
+          push.notifyCancellation(client.fcmToken, booking);
+      } catch (_) {}
     }
   } catch (err) {
     console.error('processExpiredAcceptances error', err);
@@ -54,20 +62,15 @@ const processAutoReleases = async () => {
     });
 
     for (const booking of bookings) {
-      // skip if disputed
       if (booking.escrow && booking.escrow.releaseStatus === 'disputed') continue;
 
-      // compute platform commission
       const commissionSetting = await PlatformSetting.findOne({ key: 'commissionPercentage' });
       const commissionPercent = (commissionSetting && Number(commissionSetting.value)) || 10;
       const commission = Math.round(((booking.pricing?.totalAmount || 0) * commissionPercent) / 100);
       const payoutAmount = (booking.pricing?.totalAmount || 0) - commission;
 
-      // populate provider details to access bank info and recipient codes
-      const User = require('../models/User');
       const provider = await User.findById(booking.serviceProvider);
 
-      // create payout record
       const payout = await Payout.create({
         booking: booking._id,
         provider: booking.serviceProvider,
@@ -78,11 +81,11 @@ const processAutoReleases = async () => {
         metadata: { gateway: 'paystack', originalPaymentTransactionId: booking.payment.transactionId },
       });
 
-      // attempt transfer
       try {
         const transferRes = await gateway.transferToProvider({ payout, provider });
-        // paystack returns data.reference or transfer code
-        payout.transferReference = transferRes && (transferRes.data && (transferRes.data.reference || transferRes.data.transfer_code)) || transferRes && transferRes.data;
+        payout.transferReference =
+          (transferRes && transferRes.data && (transferRes.data.reference || transferRes.data.transfer_code)) ||
+          (transferRes && transferRes.data);
         payout.status = 'completed';
         payout.completedAt = new Date();
         await payout.save();
@@ -92,6 +95,13 @@ const processAutoReleases = async () => {
         booking.escrow.releaseStatus = 'released';
         booking.escrow.releaseDate = new Date();
         await booking.save();
+
+        // Push booking update to client
+        try {
+          const client = await User.findById(booking.client);
+          if (client?.fcmToken && client.preferences?.notifications !== false)
+            push.notifyBookingUpdate(client.fcmToken, booking);
+        } catch (_) {}
       } catch (err) {
         payout.status = 'failed';
         payout.failureReason = err.message || 'Transfer failed';
@@ -104,19 +114,49 @@ const processAutoReleases = async () => {
   }
 };
 
+const processBookingReminders = async () => {
+  try {
+    const now = new Date();
+    const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    const dayAfter = new Date(now.getTime() + 48 * 60 * 60 * 1000);
+
+    const bookings = await Booking.find({
+      status: BOOKING_STATUS.CONFIRMED,
+      eventDate: { $gte: tomorrow, $lt: dayAfter },
+      reminderSent: { $ne: true },
+    });
+
+    for (const booking of bookings) {
+      try {
+        const client = await User.findById(booking.client);
+        if (client?.fcmToken && client.preferences?.notifications !== false)
+          await push.notifyBookingReminder(client.fcmToken, booking);
+        booking.reminderSent = true;
+        await booking.save();
+      } catch (err) {
+        console.error('Reminder push failed for booking', booking._id, err.message);
+      }
+    }
+  } catch (err) {
+    console.error('processBookingReminders error', err);
+  }
+};
+
 const startSchedulers = (intervalMinutes = 15) => {
-  // run immediately then interval
   processExpiredAcceptances();
   processAutoReleases();
+  processBookingReminders();
 
   setInterval(() => {
     processExpiredAcceptances();
     processAutoReleases();
+    processBookingReminders();
   }, intervalMinutes * 60 * 1000);
 };
 
 module.exports = {
   processExpiredAcceptances,
   processAutoReleases,
+  processBookingReminders,
   startSchedulers,
 };

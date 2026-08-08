@@ -4,7 +4,7 @@
  */
 
 const mongoose = require('mongoose');
-const { BOOKING_STATUS, PAYMENT_STATUS } = require('../config/constants');
+const { BOOKING_STATUS, PAYMENT_STATUS, PAYMENT_PLAN, RESCHEDULE_STATUS, REFUND_STATUS } = require('../config/constants');
 
 const bookingSchema = new mongoose.Schema(
   {
@@ -85,10 +85,66 @@ const bookingSchema = new mongoose.Schema(
     bookingLocation: {
       country: String,
       state: String,
-      city: String,
       lga: String,
+      town: String,
       address: String,
     },
+
+    // Payment Plan
+    paymentPlan: {
+      type: String,
+      enum: Object.values(PAYMENT_PLAN),
+      default: PAYMENT_PLAN.FULL,
+    },
+    depositPaid: { type: Boolean, default: false },
+    depositAmount: Number,
+    balanceDue: Number,
+    balancePaid: { type: Boolean, default: false },
+
+    // Instant Booking
+    instantBooking: { type: Boolean, default: false },
+
+    // Availability
+    availabilitySlots: [{
+      date: Date,
+      startTime: String,
+      endTime: String,
+      isAvailable: { type: Boolean, default: true },
+    }],
+
+    // Reschedule
+    reschedule: {
+      requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      newDate: Date,
+      newTime: String,
+      reason: String,
+      status: {
+        type: String,
+        enum: Object.values(RESCHEDULE_STATUS),
+        default: RESCHEDULE_STATUS.PENDING,
+      },
+      requestedAt: Date,
+      respondedAt: Date,
+    },
+
+    // Refund Request
+    refundRequest: {
+      requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      reason: String,
+      amount: Number,
+      status: {
+        type: String,
+        enum: Object.values(REFUND_STATUS),
+        default: REFUND_STATUS.NONE,
+      },
+      requestedAt: Date,
+      respondedAt: Date,
+      responseNote: String,
+    },
+
+    // Reminder
+    reminderScheduled: { type: Boolean, default: false },
+    reminderSentAt: Date,
 
     // Status
     status: {
@@ -122,7 +178,7 @@ const bookingSchema = new mongoose.Schema(
       },
       method: {
         type: String,
-        enum: ['stripe', 'bank_transfer', 'card', 'cash'],
+        enum: ['stripe', 'paystack', 'flutterwave', 'bank_transfer', 'card', 'cash'],
       },
       transactionId: String,
       paymentDate: Date,
@@ -189,6 +245,7 @@ const bookingSchema = new mongoose.Schema(
     // Metadata
     reminderSent: Boolean,
     reminderSentDate: Date,
+    bookingRequestNote: String,
   },
   {
     timestamps: true,

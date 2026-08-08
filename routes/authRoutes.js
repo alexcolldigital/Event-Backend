@@ -5,15 +5,26 @@
 
 const express = require('express');
 const { body } = require('express-validator');
+const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const authController = require('../controllers/authController');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate } = require('../middleware/auth');
 const { validateRequest } = require('../middleware/validation');
 const { createSingleUploadMiddleware } = require('../utils/fileUpload');
+
+// Strict rate limiter for auth endpoints (fraud/brute-force protection)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { success: false, message: 'Too many attempts. Please try again in 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // Register route
 router.post(
   '/register',
+  authLimiter,
   [
     body('firstName').notEmpty().withMessage('First name is required'),
     body('lastName').notEmpty().withMessage('Last name is required'),
@@ -29,6 +40,7 @@ router.post(
 // Register service provider
 router.post(
   '/register-provider',
+  authLimiter,
   [
     body('firstName').notEmpty().withMessage('First name is required'),
     body('lastName').notEmpty().withMessage('Last name is required'),
@@ -41,21 +53,67 @@ router.post(
   authController.registerServiceProvider
 );
 
-// Login route
+// Login routes
 router.post(
   '/login',
-  [
-    body('email').isEmail().withMessage('Valid email is required'),
-    body('password').notEmpty().withMessage('Password is required'),
-  ],
+  authLimiter,
+  [body('email').isEmail(), body('password').notEmpty()],
   validateRequest,
   authController.loginUser
 );
 
-// Get current user (protected route)
+router.post(
+  '/login-phone',
+  authLimiter,
+  [body('phoneNumber').notEmpty(), body('password').notEmpty()],
+  validateRequest,
+  authController.loginWithPhone
+);
+
+router.post(
+  '/login-unified',
+  authLimiter,
+  [body('identifier').notEmpty(), body('password').notEmpty()],
+  validateRequest,
+  authController.loginUnified
+);
+
+// Email verification
+router.post(
+  '/verify-email',
+  [body('token').notEmpty().withMessage('Token is required')],
+  validateRequest,
+  authController.verifyEmail
+);
+
+router.post('/resend-verification', authenticate, authController.resendVerification);
+
+// 2FA
+router.post(
+  '/verify-2fa',
+  authLimiter,
+  [body('userId').notEmpty(), body('code').isLength({ min: 6, max: 6 })],
+  validateRequest,
+  authController.verifyTwoFactor
+);
+
+router.post('/2fa/toggle', authenticate, authController.toggleTwoFactor);
+
+// Login history & device management
+router.get('/login-history', authenticate, authController.getLoginHistory);
+router.get('/devices', authenticate, authController.getDevices);
+router.post(
+  '/devices',
+  authenticate,
+  [body('deviceId').notEmpty(), body('deviceName').notEmpty()],
+  validateRequest,
+  authController.addDevice
+);
+router.delete('/devices/:deviceId', authenticate, authController.removeDevice);
+
+// Protected routes
 router.get('/me', authenticate, authController.getCurrentUser);
 
-// Update profile (protected route)
 router.put(
   '/profile',
   authenticate,
@@ -81,37 +139,53 @@ router.post(
   authController.uploadProfileImage
 );
 
-// Change password
 router.post(
   '/change-password',
   authenticate,
   [
-    body('currentPassword').notEmpty().withMessage('Current password is required'),
-    body('newPassword').isLength({ min: 6 }).withMessage('New password must be at least 6 characters'),
-    body('confirmPassword').notEmpty().withMessage('Password confirmation is required'),
+    body('currentPassword').notEmpty(),
+    body('newPassword').isLength({ min: 6 }),
+    body('confirmPassword').notEmpty(),
   ],
   validateRequest,
   authController.changePassword
 );
 
-// Forgot password
 router.post(
   '/forgot-password',
-  [body('email').isEmail().withMessage('Valid email is required')],
+  authLimiter,
+  [body('identifier').notEmpty()],
   validateRequest,
   authController.forgotPassword
 );
 
-// Reset password
 router.post(
   '/reset-password',
+  authLimiter,
   [
-    body('token').notEmpty().withMessage('Token is required'),
-    body('newPassword').isLength({ min: 6 }).withMessage('New password must be at least 6 characters'),
-    body('confirmPassword').notEmpty().withMessage('Password confirmation is required'),
+    body('token').notEmpty(),
+    body('newPassword').isLength({ min: 6 }),
+    body('confirmPassword').notEmpty(),
   ],
   validateRequest,
   authController.resetPassword
+);
+
+// FCM token registration
+router.post(
+  '/fcm-token',
+  authenticate,
+  [body('fcmToken').notEmpty().withMessage('fcmToken is required')],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const User = require('../models/User');
+      await User.findByIdAndUpdate(req.userId, { fcmToken: req.body.fcmToken });
+      res.json({ success: true, message: 'FCM token saved' });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
 );
 
 module.exports = router;

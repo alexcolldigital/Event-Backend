@@ -6,7 +6,7 @@
 const Booking = require('../models/Booking');
 const Payment = require('../models/Payment');
 const { asyncHandler } = require('../middleware/errorHandler');
-const { BOOKING_STATUS, PAYMENT_STATUS } = require('../config/constants');
+const { BOOKING_STATUS, PAYMENT_STATUS, PAYMENT_PLAN, RESCHEDULE_STATUS, REFUND_STATUS } = require('../config/constants');
 const { sendBookingConfirmationEmail } = require('../utils/email');
 const { isBookingWithinCoverage } = require('../utils/locationMatcher');
 const { buildCartCheckoutPayloads } = require('../utils/cartCheckout');
@@ -15,6 +15,7 @@ const { normalizeEscrowOptions, getEscrowRefundDecision, releaseEscrowFunds, mar
 const gateway = require('../utils/gateway');
 const PlatformSetting = require('../models/PlatformSetting');
 const Payout = require('../models/Payout');
+const push = require('../utils/pushNotification');
 
 /**
  * Create new booking
@@ -34,6 +35,9 @@ const createBooking = asyncHandler(async (req, res) => {
     clientNotes,
     bookingLocation,
     escrow: escrowInput,
+    paymentPlan,
+    instantBooking,
+    bookingRequestNote,
   } = req.body;
 
   if (!eventDate || (!serviceId && !venueId)) {
@@ -56,7 +60,15 @@ const createBooking = asyncHandler(async (req, res) => {
     }
 
     const serviceCoverage = service.coverageArea || {};
-    if (!isBookingWithinCoverage(serviceCoverage, bookingLocation || {})) {
+    const hasLocationConstraint =
+      (serviceCoverage.states && serviceCoverage.states.length > 0) ||
+      (serviceCoverage.lgas && serviceCoverage.lgas.length > 0);
+    if (
+      hasLocationConstraint &&
+      bookingLocation &&
+      Object.keys(bookingLocation).length > 0 &&
+      !isBookingWithinCoverage(serviceCoverage, bookingLocation)
+    ) {
       return res.status(400).json({
         success: false,
         message: 'This service is not available for the selected location.',
@@ -97,6 +109,20 @@ const createBooking = asyncHandler(async (req, res) => {
   const vendorAcceptHours = (vendorAcceptHoursSetting && Number(vendorAcceptHoursSetting.value)) || 24;
   const vendorAcceptDeadline = new Date(Date.now() + vendorAcceptHours * 60 * 60 * 1000);
 
+  const selectedPlan = paymentPlan || PAYMENT_PLAN.FULL;
+  let depositAmount = 0;
+  let balanceDue = 0;
+  if (selectedPlan === PAYMENT_PLAN.SPLIT_50_50) {
+    depositAmount = totalAmount / 2;
+    balanceDue = totalAmount / 2;
+  } else if (selectedPlan === PAYMENT_PLAN.DEPOSIT_20) {
+    depositAmount = totalAmount * 0.2;
+    balanceDue = totalAmount * 0.8;
+  } else {
+    depositAmount = totalAmount;
+    balanceDue = 0;
+  }
+
   let booking = new Booking({
     bookingNumber,
     client: req.userId,
@@ -120,7 +146,13 @@ const createBooking = asyncHandler(async (req, res) => {
     },
     escrow,
     vendorAcceptDeadline,
-    status: BOOKING_STATUS.PENDING,
+    paymentPlan: selectedPlan,
+    depositAmount,
+    balanceDue,
+    instantBooking: !!instantBooking,
+    bookingRequestNote,
+    status: instantBooking ? BOOKING_STATUS.CONFIRMED : BOOKING_STATUS.PENDING,
+    confirmedDate: instantBooking ? new Date() : undefined,
   });
 
   await booking.save();
@@ -190,7 +222,15 @@ const checkoutCart = asyncHandler(async (req, res) => {
       }
 
       const serviceCoverage = service.coverageArea || {};
-      if (!isBookingWithinCoverage(serviceCoverage, bookingLocation || {})) {
+      const hasLocationConstraint =
+        (serviceCoverage.states && serviceCoverage.states.length > 0) ||
+        (serviceCoverage.lgas && serviceCoverage.lgas.length > 0);
+      if (
+        hasLocationConstraint &&
+        bookingLocation &&
+        Object.keys(bookingLocation).length > 0 &&
+        !isBookingWithinCoverage(serviceCoverage, bookingLocation)
+      ) {
         continue;
       }
 
@@ -386,25 +426,22 @@ const createBookingPaymentSession = asyncHandler(async (req, res) => {
     process.env.FRONTEND_URL ||
     `${req.protocol}://${req.get('host')}`;
 
-  const sessionPayload = buildCheckoutSessionPayload({ booking, origin });
-
   try {
-    const session = await require('stripe')(process.env.STRIPE_SECRET_KEY).checkout.sessions.create(
-      sessionPayload
-    );
+    const init = await gateway.initializeCheckout({ booking, origin });
 
-    booking.payment.method = 'stripe';
-    booking.payment.transactionId = session.id;
+    booking.payment.method = init.gateway || 'paystack';
+    booking.payment.transactionId = init.reference || booking.payment.transactionId;
     await booking.save();
 
     res.status(200).json({
       success: true,
       message: 'Payment session created successfully',
-      session,
+      checkoutUrl: init.checkoutUrl,
+      gateway: init.gateway,
       booking,
     });
   } catch (error) {
-    console.error('Error creating checkout session:', error);
+    console.error('Error creating payment session:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to create payment session. Please try again later.',
@@ -451,6 +488,14 @@ const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
   booking.escrow.holdAmount = booking.pricing?.totalAmount || 0;
   booking.escrow.holdDate = new Date();
   await booking.save();
+
+  // Push payment confirmation (non-blocking)
+  try {
+    const User = require('../models/User');
+    const client = await User.findById(booking.client);
+    if (client?.fcmToken && client.preferences?.notifications !== false)
+      push.notifyPaymentConfirmation(client.fcmToken, booking);
+  } catch (_) {}
 
   res.status(200).json({
     success: true,
@@ -568,15 +613,26 @@ const confirmBooking = asyncHandler(async (req, res) => {
   }
   await booking.save();
 
-  // Send confirmation email
-  const User = require('../models/User');
-  const client = await User.findById(booking.client);
-  await sendBookingConfirmationEmail(client.email, {
-    bookingNumber: booking.bookingNumber,
-    eventDate: booking.eventDate,
-    totalAmount: booking.pricing.totalAmount,
-    status: booking.status,
-  });
+  // Send confirmation email + push (non-blocking)
+  try {
+    const User = require('../models/User');
+    const client = await User.findById(booking.client);
+    if (client) {
+      if (client.email) {
+        await sendBookingConfirmationEmail(client.email, {
+          bookingNumber: booking.bookingNumber,
+          eventDate: booking.eventDate,
+          totalAmount: booking.pricing.totalAmount,
+          status: booking.status,
+        });
+      }
+      if (client.fcmToken && client.preferences?.notifications !== false) {
+        await push.notifyBookingUpdate(client.fcmToken, booking);
+      }
+    }
+  } catch (emailErr) {
+    console.error('Booking confirmation notification failed (non-fatal):', emailErr.message || emailErr);
+  }
 
   res.status(200).json({
     success: true,
@@ -639,6 +695,19 @@ const cancelBooking = asyncHandler(async (req, res) => {
 
   await booking.save();
 
+  // Push cancellation alert to both parties (non-blocking)
+  try {
+    const User = require('../models/User');
+    const [client, provider] = await Promise.all([
+      User.findById(booking.client),
+      User.findById(booking.serviceProvider),
+    ]);
+    if (client?.fcmToken && client.preferences?.notifications !== false)
+      push.notifyCancellation(client.fcmToken, booking);
+    if (provider?.fcmToken && provider.preferences?.notifications !== false)
+      push.notifyCancellation(provider.fcmToken, booking);
+  } catch (_) {}
+
   res.status(200).json({
     success: true,
     message: 'Booking cancelled successfully',
@@ -678,6 +747,14 @@ const completeBooking = asyncHandler(async (req, res) => {
   }
 
   await booking.save();
+
+  // Push booking update to client (non-blocking)
+  try {
+    const User = require('../models/User');
+    const client = await User.findById(booking.client);
+    if (client?.fcmToken && client.preferences?.notifications !== false)
+      push.notifyBookingUpdate(client.fcmToken, booking);
+  } catch (_) {}
 
   res.status(200).json({
     success: true,
@@ -795,6 +872,14 @@ const handlePaystackWebhookRaw = async (req, res) => {
       booking.escrow.holdAmount = amount || booking.pricing?.totalAmount || 0;
       booking.escrow.holdDate = new Date();
       await booking.save();
+
+      // Push payment confirmation (non-blocking)
+      try {
+        const User = require('../models/User');
+        const client = await User.findById(booking.client);
+        if (client?.fcmToken && client.preferences?.notifications !== false)
+          require('../utils/pushNotification').notifyPaymentConfirmation(client.fcmToken, booking);
+      } catch (_) {}
     }
 
     return res.status(200).send('ok');
@@ -803,6 +888,190 @@ const handlePaystackWebhookRaw = async (req, res) => {
     return res.status(500).send('error');
   }
 };
+
+/**
+ * Check availability for a service/venue on a date
+ * GET /api/bookings/availability
+ */
+const checkAvailability = asyncHandler(async (req, res) => {
+  const { serviceId, venueId, date } = req.query;
+  if (!date || (!serviceId && !venueId)) {
+    return res.status(400).json({ success: false, message: 'date and serviceId or venueId required' });
+  }
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(date);
+  end.setHours(23, 59, 59, 999);
+
+  const query = {
+    eventDate: { $gte: start, $lte: end },
+    status: { $in: [BOOKING_STATUS.PENDING, BOOKING_STATUS.CONFIRMED] },
+  };
+  if (serviceId) query.service = serviceId;
+  if (venueId) query.venue = venueId;
+
+  const existing = await Booking.find(query).select('eventDate eventTime eventEndDate status');
+  res.status(200).json({ success: true, date, bookings: existing, isAvailable: existing.length === 0 });
+});
+
+/**
+ * Request reschedule
+ * PATCH /api/bookings/:id/reschedule
+ */
+const requestReschedule = asyncHandler(async (req, res) => {
+  const { newDate, newTime, reason } = req.body;
+  const booking = await Booking.findById(req.params.id);
+  if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+  const isParty =
+    booking.client.toString() === req.userId ||
+    booking.serviceProvider.toString() === req.userId;
+  if (!isParty && req.user.role !== 'admin') {
+    return res.status(403).json({ success: false, message: 'Not authorized' });
+  }
+  if ([BOOKING_STATUS.CANCELLED, BOOKING_STATUS.COMPLETED].includes(booking.status)) {
+    return res.status(400).json({ success: false, message: 'Cannot reschedule a completed or cancelled booking' });
+  }
+
+  booking.reschedule = {
+    requestedBy: req.userId,
+    newDate,
+    newTime,
+    reason,
+    status: RESCHEDULE_STATUS.PENDING,
+    requestedAt: new Date(),
+  };
+  await booking.save();
+
+  const io = req.app.get('io');
+  if (io) io.emit('booking_reschedule_request', { bookingId: booking._id });
+
+  res.status(200).json({ success: true, message: 'Reschedule request sent', booking });
+});
+
+/**
+ * Respond to reschedule request (accept/reject)
+ * PATCH /api/bookings/:id/reschedule/respond
+ */
+const respondReschedule = asyncHandler(async (req, res) => {
+  const { accept } = req.body;
+  const booking = await Booking.findById(req.params.id);
+  if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+  const isOtherParty =
+    (booking.reschedule?.requestedBy?.toString() !== req.userId) &&
+    (booking.client.toString() === req.userId || booking.serviceProvider.toString() === req.userId);
+  if (!isOtherParty && req.user.role !== 'admin') {
+    return res.status(403).json({ success: false, message: 'Not authorized to respond' });
+  }
+  if (!booking.reschedule || booking.reschedule.status !== RESCHEDULE_STATUS.PENDING) {
+    return res.status(400).json({ success: false, message: 'No pending reschedule request' });
+  }
+
+  if (accept) {
+    booking.eventDate = booking.reschedule.newDate || booking.eventDate;
+    booking.eventTime = booking.reschedule.newTime || booking.eventTime;
+    booking.reschedule.status = RESCHEDULE_STATUS.ACCEPTED;
+  } else {
+    booking.reschedule.status = RESCHEDULE_STATUS.REJECTED;
+  }
+  booking.reschedule.respondedAt = new Date();
+  await booking.save();
+
+  res.status(200).json({ success: true, message: accept ? 'Reschedule accepted' : 'Reschedule rejected', booking });
+});
+
+/**
+ * Request a refund
+ * PATCH /api/bookings/:id/refund
+ */
+const requestRefund = asyncHandler(async (req, res) => {
+  const { reason, amount } = req.body;
+  const booking = await Booking.findById(req.params.id);
+  if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+  if (booking.client.toString() !== req.userId) {
+    return res.status(403).json({ success: false, message: 'Only the client can request a refund' });
+  }
+  if (booking.payment.status !== PAYMENT_STATUS.COMPLETED) {
+    return res.status(400).json({ success: false, message: 'No completed payment to refund' });
+  }
+  if (booking.refundRequest?.status === REFUND_STATUS.REQUESTED) {
+    return res.status(400).json({ success: false, message: 'Refund already requested' });
+  }
+
+  booking.refundRequest = {
+    requestedBy: req.userId,
+    reason,
+    amount: amount || booking.pricing?.totalAmount,
+    status: REFUND_STATUS.REQUESTED,
+    requestedAt: new Date(),
+  };
+  await booking.save();
+
+  res.status(200).json({ success: true, message: 'Refund request submitted', booking });
+});
+
+/**
+ * Respond to refund request (admin/provider)
+ * PATCH /api/bookings/:id/refund/respond
+ */
+const respondRefund = asyncHandler(async (req, res) => {
+  const { approve, responseNote } = req.body;
+  const booking = await Booking.findById(req.params.id);
+  if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+  const canRespond =
+    req.user.role === 'admin' || booking.serviceProvider.toString() === req.userId;
+  if (!canRespond) return res.status(403).json({ success: false, message: 'Not authorized' });
+
+  if (!booking.refundRequest || booking.refundRequest.status !== REFUND_STATUS.REQUESTED) {
+    return res.status(400).json({ success: false, message: 'No pending refund request' });
+  }
+
+  booking.refundRequest.status = approve ? REFUND_STATUS.APPROVED : REFUND_STATUS.REJECTED;
+  booking.refundRequest.respondedAt = new Date();
+  booking.refundRequest.responseNote = responseNote || '';
+
+  if (approve) {
+    booking.payment.refundStatus = 'pending';
+    booking.payment.refundAmount = booking.refundRequest.amount;
+  }
+  await booking.save();
+
+  res.status(200).json({ success: true, message: approve ? 'Refund approved' : 'Refund rejected', booking });
+});
+
+/**
+ * Pay balance (for split/deposit plans)
+ * PATCH /api/bookings/:id/pay-balance
+ */
+const payBalance = asyncHandler(async (req, res) => {
+  const booking = await Booking.findById(req.params.id);
+  if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+  if (booking.client.toString() !== req.userId) {
+    return res.status(403).json({ success: false, message: 'Not authorized' });
+  }
+  if (booking.balancePaid) {
+    return res.status(400).json({ success: false, message: 'Balance already paid' });
+  }
+
+  const origin =
+    req.body.origin || process.env.EXPO_PUBLIC_APP_URL || process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`;
+
+  let checkoutUrl = null;
+  try {
+    const init = await gateway.initializeCheckout({
+      booking: { ...booking.toObject(), pricing: { ...booking.pricing, totalAmount: booking.balanceDue } },
+      origin,
+    });
+    if (init?.checkoutUrl) checkoutUrl = init.checkoutUrl;
+  } catch (err) {
+    console.error('Balance payment init failed:', err.message);
+  }
+
+  res.status(200).json({ success: true, message: 'Balance payment session created', checkoutUrl, booking });
+});
 
 module.exports = {
   createBooking,
@@ -818,4 +1087,10 @@ module.exports = {
   releaseEscrow,
   disputeEscrow,
   handlePaystackWebhookRaw,
+  checkAvailability,
+  requestReschedule,
+  respondReschedule,
+  requestRefund,
+  respondRefund,
+  payBalance,
 };

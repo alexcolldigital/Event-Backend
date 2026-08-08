@@ -8,6 +8,8 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const express = require('express');
+const http = require('http');
+const { Server: SocketIOServer } = require('socket.io');
 const mongoose = require('mongoose');
 const helmet = require('helmet');
 const cors = require('cors');
@@ -23,12 +25,49 @@ const { USER_ROLES } = require('./config/constants');
 const authRoutes = require('./routes/authRoutes');
 const serviceRoutes = require('./routes/serviceRoutes');
 const bookingRoutes = require('./routes/bookingRoutes');
+const messageRoutes = require('./routes/messageRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const bookingController = require('./controllers/bookingController');
 const scheduler = require('./utils/scheduler');
 
-// Initialize Express app
+// Initialize Express app + HTTP server + Socket.IO
 const app = express();
+const httpServer = http.createServer(app);
+const io = new SocketIOServer(httpServer, {
+  cors: { origin: '*', methods: ['GET', 'POST'] },
+  transports: ['websocket', 'polling'],
+});
+
+// Attach io to app so controllers can emit events
+app.set('io', io);
+
+// ─── Socket.IO real-time messaging ──────────────────────────────────────────
+io.on('connection', (socket) => {
+  // Join personal room (userId) and any conversation rooms
+  socket.on('join', ({ userId, conversationIds = [] }) => {
+    if (userId) socket.join(String(userId));
+    conversationIds.forEach((id) => socket.join(id));
+  });
+
+  socket.on('join_conversation', ({ conversationId }) => {
+    if (conversationId) socket.join(conversationId);
+  });
+
+  socket.on('leave_conversation', ({ conversationId }) => {
+    if (conversationId) socket.leave(conversationId);
+  });
+
+  // Typing indicators
+  socket.on('typing_start', ({ conversationId, userId, userName }) => {
+    socket.to(conversationId).emit('typing_start', { userId, userName, conversationId });
+  });
+
+  socket.on('typing_stop', ({ conversationId, userId }) => {
+    socket.to(conversationId).emit('typing_stop', { userId, conversationId });
+  });
+
+  socket.on('disconnect', () => {});
+});
 
 const trustProxy = process.env.TRUST_PROXY === '1' || process.env.TRUST_PROXY === 'true' || process.env.NODE_ENV === 'production';
 if (trustProxy) {
@@ -167,7 +206,11 @@ const limiter = rateLimit({
   message: 'Too many requests, please try again later.',
 });
 
-app.use('/api/', limiter);
+app.use('/api/', (req, res, next) => {
+  // Exclude Paystack webhook from rate limiting (high-frequency external calls)
+  if (req.path.startsWith('/bookings/webhook')) return next();
+  return limiter(req, res, next);
+});
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
@@ -222,6 +265,7 @@ const requireDatabase = async (req, res, next) => {
 app.use('/api/auth', requireDatabase, authRoutes);
 app.use('/api/services', requireDatabase, serviceRoutes);
 app.use('/api/bookings', requireDatabase, bookingRoutes);
+app.use('/api/messages', requireDatabase, messageRoutes);
 app.use('/api/admin', requireDatabase, adminRoutes);
 
 const frontendDistPath = path.join(__dirname, '../frontend/dist');
@@ -262,7 +306,7 @@ const PORT = Number(process.env.PORT) || DEFAULT_PORT;
 let server = null;
 
 const startServer = (port = PORT) => {
-  server = app.listen(port, () => {
+  server = httpServer.listen(port, () => {
     const address = server && server.address();
     const actualPort = address && typeof address === 'object' ? address.port : port;
     process.env.PORT = String(actualPort);
@@ -272,7 +316,7 @@ const startServer = (port = PORT) => {
     console.log(`🌐 CORS enabled for: ${process.env.FRONTEND_URL}`);
   });
 
-  server.on('error', (error) => {
+  httpServer.on('error', (error) => {
     if (error.code === 'EADDRINUSE') {
       console.warn(`Port ${port} is busy. Trying ${port + 1}...`);
       setImmediate(() => startServer(port + 1));

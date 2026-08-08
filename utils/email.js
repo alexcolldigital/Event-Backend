@@ -150,6 +150,59 @@ const sendPasswordResetEmail = async (email, resetUrl) => {
 };
 
 /**
+ * Send email verification email
+ */
+const sendEmailVerificationEmail = async (email, firstName, verificationUrl) => {
+  if (!isEmailConfigured()) {
+    console.log('Email not configured; skipping verification email');
+    return;
+  }
+  const mailOptions = {
+    from: process.env.FROM_EMAIL,
+    to: email,
+    subject: 'Verify Your Email - Event Compass',
+    html: `
+      <h2>Hello ${firstName},</h2>
+      <p>Please verify your email address to activate your Event Compass account.</p>
+      <p><a href="${verificationUrl}" style="background:#4F46E5;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;">Verify Email</a></p>
+      <p>This link expires in 24 hours. If you didn't create this account, ignore this email.</p>
+    `,
+  };
+  try {
+    await transporter.sendMail(mailOptions);
+  } catch (error) {
+    console.error('Error sending verification email:', error);
+  }
+};
+
+/**
+ * Send 2FA code email
+ */
+const sendTwoFactorEmail = async (email, firstName, code) => {
+  if (!isEmailConfigured()) {
+    console.log('Email not configured; skipping 2FA email');
+    return;
+  }
+  const mailOptions = {
+    from: process.env.FROM_EMAIL,
+    to: email,
+    subject: 'Your Login Verification Code - Event Compass',
+    html: `
+      <h2>Hello ${firstName},</h2>
+      <p>Your two-factor authentication code is:</p>
+      <h1 style="letter-spacing:8px;font-size:36px;color:#4F46E5;">${code}</h1>
+      <p>This code expires in <strong>10 minutes</strong>. Do not share it with anyone.</p>
+      <p>If you didn't attempt to login, please change your password immediately.</p>
+    `,
+  };
+  try {
+    await transporter.sendMail(mailOptions);
+  } catch (error) {
+    console.error('Error sending 2FA email:', error);
+  }
+};
+
+/**
  * Send service provider approval email
  */
 const sendApprovalEmail = async (email, providerName) => {
@@ -184,4 +237,6 @@ module.exports = {
   sendPaymentReceiptEmail,
   sendPasswordResetEmail,
   sendApprovalEmail,
+  sendEmailVerificationEmail,
+  sendTwoFactorEmail,
 };

@@ -278,6 +278,29 @@ const NIGERIAN_LOCATIONS = {
   },
 };
 
+// Payment Plan
+const PAYMENT_PLAN = {
+  FULL: 'full',
+  SPLIT_50_50: 'split_50_50',
+  DEPOSIT_20: 'deposit_20',
+};
+
+// Reschedule Status
+const RESCHEDULE_STATUS = {
+  PENDING: 'pending',
+  ACCEPTED: 'accepted',
+  REJECTED: 'rejected',
+};
+
+// Refund Status
+const REFUND_STATUS = {
+  NONE: 'none',
+  REQUESTED: 'requested',
+  APPROVED: 'approved',
+  REJECTED: 'rejected',
+  COMPLETED: 'completed',
+};
+
 // Payment Status
 const PAYMENT_STATUS = {
   PENDING: 'pending',
@@ -307,6 +330,9 @@ module.exports = {
   EVENT_TYPES,
   NIGERIAN_LOCATIONS,
   PAYMENT_STATUS,
+  PAYMENT_PLAN,
   BOOKING_STATUS,
+  RESCHEDULE_STATUS,
+  REFUND_STATUS,
   RATING_LIMITS,
 };

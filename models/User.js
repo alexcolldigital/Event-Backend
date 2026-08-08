@@ -30,6 +30,7 @@ const userSchema = new mongoose.Schema(
     phoneNumber: {
       type: String,
       required: [true, 'Phone number is required'],
+      unique: true,
     },
     password: {
       type: String,
@@ -117,6 +118,10 @@ const userSchema = new mongoose.Schema(
     },
 
     // Verification
+    isVerified: {
+      type: Boolean,
+      default: false,
+    },
     isEmailVerified: {
       type: Boolean,
       default: false,
@@ -128,6 +133,24 @@ const userSchema = new mongoose.Schema(
     isBusinessVerified: {
       type: Boolean,
       default: false,
+    },
+    trustScore: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 100,
+    },
+    badges: [String],
+    securityDeposit: {
+      amount: {
+        type: Number,
+        default: 0,
+      },
+      paidAt: Date,
+      refundable: {
+        type: Boolean,
+        default: true,
+      },
     },
     verificationDocuments: [
       {
@@ -190,6 +213,45 @@ const userSchema = new mongoose.Schema(
     emailVerificationExpires: Date,
     passwordResetToken: String,
     passwordResetExpires: Date,
+
+    // Two-Factor Authentication
+    twoFactorEnabled: { type: Boolean, default: false },
+    twoFactorSecret: { type: String, select: false },
+    twoFactorCode: { type: String, select: false },
+    twoFactorExpires: { type: Date, select: false },
+
+    // Login Security
+    failedLoginAttempts: { type: Number, default: 0 },
+    lockUntil: { type: Date },
+    lastLoginAt: { type: Date },
+    lastLoginIp: { type: String },
+
+    // Login History (last 20 entries)
+    loginHistory: [
+      {
+        ip: String,
+        userAgent: String,
+        deviceId: String,
+        success: Boolean,
+        timestamp: { type: Date, default: Date.now },
+        location: String,
+      },
+    ],
+
+    // FCM Push Token
+    fcmToken: { type: String, default: null },
+
+    // Trusted Devices
+    trustedDevices: [
+      {
+        deviceId: String,
+        deviceName: String,
+        userAgent: String,
+        ip: String,
+        addedAt: { type: Date, default: Date.now },
+        lastUsedAt: { type: Date, default: Date.now },
+      },
+    ],
   },
   {
     timestamps: true,
@@ -236,6 +298,57 @@ userSchema.methods.getFullName = function () {
 };
 
 /**
+ * Check if account is locked
+ */
+userSchema.virtual('isLocked').get(function () {
+  return this.lockUntil && this.lockUntil > Date.now();
+});
+
+/**
+ * Increment failed login attempts, lock after 5
+ */
+userSchema.methods.incFailedLogins = async function () {
+  this.failedLoginAttempts += 1;
+  if (this.failedLoginAttempts >= 5) {
+    this.lockUntil = new Date(Date.now() + 30 * 60 * 1000); // 30 min lock
+  }
+  await this.save();
+};
+
+/**
+ * Reset failed login attempts on successful login
+ */
+userSchema.methods.resetFailedLogins = async function () {
+  this.failedLoginAttempts = 0;
+  this.lockUntil = undefined;
+  await this.save();
+};
+
+/**
+ * Add login history entry (keep last 20)
+ */
+userSchema.methods.addLoginHistory = async function (entry) {
+  this.loginHistory.unshift(entry);
+  if (this.loginHistory.length > 20) this.loginHistory = this.loginHistory.slice(0, 20);
+  if (entry.success) {
+    this.lastLoginAt = entry.timestamp || new Date();
+    this.lastLoginIp = entry.ip;
+  }
+  await this.save();
+};
+
+/**
+ * Generate 6-digit 2FA code
+ */
+userSchema.methods.generateTwoFactorCode = async function () {
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  this.twoFactorCode = code;
+  this.twoFactorExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+  await this.save();
+  return code;
+};
+
+/**
  * Remove sensitive data from user object
  */
 userSchema.methods.toJSON = function () {
@@ -243,7 +356,9 @@ userSchema.methods.toJSON = function () {
   delete obj.password;
   delete obj.emailVerificationToken;
   delete obj.passwordResetToken;
-  delete obj.accountNumber; // Hide bank details in API responses
+  delete obj.twoFactorCode;
+  delete obj.twoFactorSecret;
+  delete obj.accountNumber;
   return obj;
 };
 

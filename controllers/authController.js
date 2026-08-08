@@ -3,6 +3,7 @@
  * Handles user registration, login, and auth-related operations
  */
 
+const crypto = require('crypto');
 const User = require('../models/User');
 const { generateToken } = require('../config/jwt');
 const { asyncHandler } = require('../middleware/errorHandler');
@@ -10,8 +11,48 @@ const {
   sendWelcomeEmail,
   sendPasswordResetEmail,
   sendApprovalEmail,
+  sendTwoFactorEmail,
+  sendEmailVerificationEmail,
 } = require('../utils/email');
 const { USER_ROLES } = require('../config/constants');
+
+// Helper: extract request metadata
+const getRequestMeta = (req) => ({
+  ip: req.ip || req.connection?.remoteAddress || 'unknown',
+  userAgent: req.headers['user-agent'] || 'unknown',
+  deviceId: req.headers['x-device-id'] || null,
+});
+
+// Helper: detect suspicious login (new IP + new device)
+const isSuspiciousLogin = (user, ip, deviceId) => {
+  if (!user.lastLoginIp) return false;
+  const knownDevice = deviceId && user.trustedDevices.some((d) => d.deviceId === deviceId);
+  const knownIp = user.lastLoginIp === ip;
+  return !knownDevice && !knownIp;
+};
+
+const formatUser = (user) => ({
+  id: user._id,
+  _id: user._id,
+  firstName: user.firstName,
+  lastName: user.lastName,
+  email: user.email,
+  phoneNumber: user.phoneNumber,
+  role: user.role,
+  businessName: user.businessName,
+  businessType: user.businessType,
+  businessDescription: user.businessDescription,
+  profileImage: user.profileImage,
+  averageRating: user.averageRating,
+  totalBookings: user.totalBookings,
+  completedBookings: user.completedBookings,
+  totalReviews: user.totalReviews,
+  isEmailVerified: user.isEmailVerified,
+  isPhoneVerified: user.isPhoneVerified,
+  preferences: user.preferences,
+  bio: user.bio,
+  address: user.address,
+});
 
 /**
  * Register new user
@@ -21,64 +62,45 @@ const registerUser = asyncHandler(async (req, res) => {
   const { firstName, lastName, email, phoneNumber, password, passwordConfirm, role } =
     req.body;
 
-  // Validate input
   if (!firstName || !lastName || !email || !phoneNumber || !password) {
-    return res.status(400).json({
-      success: false,
-      message: 'All fields are required',
-    });
+    return res.status(400).json({ success: false, message: 'All fields are required' });
   }
 
-  // Check if user already exists
   const existingUser = await User.findOne({ email });
-  if (existingUser) {
-    return res.status(400).json({
-      success: false,
-      message: 'Email already in use',
-    });
-  }
+  if (existingUser) return res.status(400).json({ success: false, message: 'Email already in use' });
 
-  // Validate password confirmation
+  const existingPhone = await User.findOne({ phoneNumber });
+  if (existingPhone) return res.status(400).json({ success: false, message: 'Phone number already in use' });
+
   if (password !== passwordConfirm) {
-    return res.status(400).json({
-      success: false,
-      message: 'Passwords do not match',
-    });
+    return res.status(400).json({ success: false, message: 'Passwords do not match' });
   }
 
-  // Create new user
   const user = new User({
-    firstName,
-    lastName,
-    email,
-    phoneNumber,
-    password,
+    firstName, lastName, email, phoneNumber, password,
     role: role || USER_ROLES.CLIENT,
   });
 
+  // Generate email verification token
+  const verificationToken = user.getEmailVerificationToken();
   await user.save();
 
-  // Generate token
   const token = generateToken(user._id, user.role);
 
-  // Send welcome email
-  await sendWelcomeEmail(
-    email,
-    firstName,
-    `${process.env.FRONTEND_URL}/verify-email?token=${token}`
-  );
+  try {
+    await sendEmailVerificationEmail(
+      email, firstName,
+      `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`
+    );
+  } catch (emailErr) {
+    console.error('Verification email failed (non-fatal):', emailErr.message);
+  }
 
   res.status(201).json({
     success: true,
-    message: 'User registered successfully',
+    message: 'User registered successfully. Please verify your email.',
     token,
-    user: {
-      id: user._id,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      email: user.email,
-      role: user.role,
-    },
+    user: formatUser(user),
   });
 });
 
@@ -148,101 +170,142 @@ const registerServiceProvider = asyncHandler(async (req, res) => {
     success: true,
     message: 'Service provider registered successfully',
     token,
-    user: {
-      id: user._id,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      email: user.email,
-      phoneNumber: user.phoneNumber,
-      role: user.role,
-      businessName: user.businessName,
-      businessDescription: user.businessDescription,
-      profileImage: user.profileImage,
-      isEmailVerified: user.isEmailVerified,
-      isPhoneVerified: user.isPhoneVerified,
-      preferences: user.preferences,
-    },
+    user: formatUser(user),
   });
 });
 
+// Shared login logic
+const performLogin = async (user, req, res) => {
+  const { ip, userAgent, deviceId } = getRequestMeta(req);
+
+  // Check account lock (fraud detection)
+  if (user.isLocked) {
+    await user.addLoginHistory({ ip, userAgent, deviceId, success: false });
+    return res.status(423).json({
+      success: false,
+      message: 'Account temporarily locked due to too many failed attempts. Try again in 30 minutes.',
+    });
+  }
+
+  if (!user.isActive) {
+    return res.status(403).json({ success: false, message: 'Account is inactive' });
+  }
+  if (user.isBlocked) {
+    return res.status(403).json({ success: false, message: `Account is blocked. Reason: ${user.blockReason}` });
+  }
+
+  // If 2FA enabled, send code and require verification
+  if (user.twoFactorEnabled) {
+    const code = await user.generateTwoFactorCode();
+    try { await sendTwoFactorEmail(user.email, user.firstName, code); } catch (e) { /* non-fatal */ }
+    return res.status(200).json({
+      success: true,
+      requiresTwoFactor: true,
+      userId: user._id,
+      message: '2FA code sent to your email',
+    });
+  }
+
+  // Suspicious login detection
+  const suspicious = isSuspiciousLogin(user, ip, deviceId);
+
+  await user.resetFailedLogins();
+  await user.addLoginHistory({ ip, userAgent, deviceId, success: true });
+
+  // Update trusted device last used
+  if (deviceId) {
+    const device = user.trustedDevices.find((d) => d.deviceId === deviceId);
+    if (device) device.lastUsedAt = new Date();
+    await user.save();
+  }
+
+  const token = generateToken(user._id, user.role);
+
+  return res.status(200).json({
+    success: true,
+    message: 'Login successful',
+    token,
+    user: formatUser(user),
+    suspicious,
+  });
+};
+
 /**
- * Login user
+ * Login user with email
  * POST /api/auth/login
  */
 const loginUser = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
-
-  // Validate input
   if (!email || !password) {
-    return res.status(400).json({
-      success: false,
-      message: 'Email and password are required',
-    });
+    return res.status(400).json({ success: false, message: 'Email and password are required' });
   }
 
-  // Find user and include password
-  const user = await User.findOne({ email }).select('+password');
-  if (!user) {
-    return res.status(401).json({
-      success: false,
-      message: 'Invalid credentials',
-    });
-  }
+  const user = await User.findOne({ email }).select('+password +twoFactorCode +twoFactorExpires +twoFactorSecret');
+  if (!user) return res.status(401).json({ success: false, message: 'Invalid credentials' });
 
-  // Check if account is active
-  if (!user.isActive) {
-    return res.status(403).json({
-      success: false,
-      message: 'Account is inactive',
-    });
-  }
-
-  // Check if account is blocked
-  if (user.isBlocked) {
-    return res.status(403).json({
-      success: false,
-      message: `Account is blocked. Reason: ${user.blockReason}`,
-    });
-  }
-
-  // Compare passwords
   const isPasswordValid = await user.comparePassword(password);
   if (!isPasswordValid) {
-    return res.status(401).json({
-      success: false,
-      message: 'Invalid credentials',
-    });
+    await user.incFailedLogins();
+    const { ip, userAgent, deviceId } = getRequestMeta(req);
+    await user.addLoginHistory({ ip, userAgent, deviceId, success: false });
+    return res.status(401).json({ success: false, message: 'Invalid credentials' });
   }
 
-  // Generate token
-  const token = generateToken(user._id, user.role);
+  return performLogin(user, req, res);
+});
 
-  res.status(200).json({
-    success: true,
-    message: 'Login successful',
-    token,
-    user: {
-      id: user._id,
-      _id: user._id,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      email: user.email,
-      phoneNumber: user.phoneNumber,
-      role: user.role,
-      businessName: user.businessName,
-      businessDescription: user.businessDescription,
-      profileImage: user.profileImage,
-      averageRating: user.averageRating,
-      totalBookings: user.totalBookings,
-      completedBookings: user.completedBookings,
-      totalReviews: user.totalReviews,
-      isEmailVerified: user.isEmailVerified,
-      isPhoneVerified: user.isPhoneVerified,
-      preferences: user.preferences,
-      bio: user.bio,
-      address: user.address,
-    },
-  });
+/**
+ * Login user with phone number
+ * POST /api/auth/login-phone
+ */
+const loginWithPhone = asyncHandler(async (req, res) => {
+  const { phoneNumber, password } = req.body;
+  if (!phoneNumber || !password) {
+    return res.status(400).json({ success: false, message: 'Phone number and password are required' });
+  }
+
+  const user = await User.findOne({ phoneNumber }).select('+password +twoFactorCode +twoFactorExpires +twoFactorSecret');
+  if (!user) return res.status(401).json({ success: false, message: 'Invalid credentials' });
+
+  const isPasswordValid = await user.comparePassword(password);
+  if (!isPasswordValid) {
+    await user.incFailedLogins();
+    const { ip, userAgent, deviceId } = getRequestMeta(req);
+    await user.addLoginHistory({ ip, userAgent, deviceId, success: false });
+    return res.status(401).json({ success: false, message: 'Invalid credentials' });
+  }
+
+  return performLogin(user, req, res);
+});
+
+/**
+ * Unified login - accepts either email or phone number
+ * POST /api/auth/login-unified
+ */
+const loginUnified = asyncHandler(async (req, res) => {
+  const { identifier, password } = req.body;
+  if (!identifier || !password) {
+    return res.status(400).json({ success: false, message: 'Email/phone and password are required' });
+  }
+  if (typeof identifier !== 'string') {
+    return res.status(400).json({ success: false, message: 'Invalid identifier format' });
+  }
+
+  const isEmail = identifier.includes('@');
+  const query = isEmail ? { email: identifier } : { phoneNumber: identifier };
+
+  const user = await User.findOne(query).select('+password +twoFactorCode +twoFactorExpires +twoFactorSecret');
+  if (!user) return res.status(401).json({ success: false, message: 'Invalid credentials' });
+
+  const isPasswordValid = await user.comparePassword(password);
+  if (!isPasswordValid) {
+    await user.incFailedLogins();
+    const { ip, userAgent, deviceId } = getRequestMeta(req);
+    await user.addLoginHistory({ ip, userAgent, deviceId, success: false });
+    return res.status(401).json({ success: false, message: 'Invalid credentials' });
+  }
+
+  return performLogin(user, req, res);
 });
 
 /**
@@ -377,9 +440,24 @@ const changePassword = asyncHandler(async (req, res) => {
  * POST /api/auth/forgot-password
  */
 const forgotPassword = asyncHandler(async (req, res) => {
-  const { email } = req.body;
+  const { identifier } = req.body;
 
-  const user = await User.findOne({ email });
+  if (!identifier) {
+    return res.status(400).json({
+      success: false,
+      message: 'Email or phone number is required',
+    });
+  }
+
+  if (typeof identifier !== 'string') {
+    return res.status(400).json({ success: false, message: 'Invalid identifier format' });
+  }
+
+  // Determine if identifier is email or phone number
+  const isEmail = identifier.includes('@');
+  const query = isEmail ? { email: identifier } : { phoneNumber: identifier };
+
+  const user = await User.findOne(query);
   if (!user) {
     return res.status(404).json({
       success: false,
@@ -391,13 +469,27 @@ const forgotPassword = asyncHandler(async (req, res) => {
   const resetToken = user.getEmailVerificationToken();
   await user.save();
 
-  // Send email
-  await sendPasswordResetEmail(email, `${process.env.FRONTEND_URL}/reset-password/${resetToken}`);
-
-  res.status(200).json({
-    success: true,
-    message: 'Password reset link sent to email',
-  });
+  // Send reset link via email or SMS
+  if (isEmail) {
+    try {
+      await sendPasswordResetEmail(identifier, `${process.env.FRONTEND_URL}/reset-password/${resetToken}`);
+    } catch (emailErr) {
+      console.error('Password reset email failed (non-fatal):', emailErr.message || emailErr);
+    }
+    res.status(200).json({
+      success: true,
+      message: 'Password reset link sent to email',
+    });
+  } else {
+    // TODO: Implement SMS sending for phone number
+    // For now, we'll return the token in response (in production, send via SMS)
+    res.status(200).json({
+      success: true,
+      message: 'Password reset link sent via SMS',
+      // In development, include token for testing
+      ...(process.env.NODE_ENV === 'development' && { resetToken }),
+    });
+  }
 });
 
 /**
@@ -444,14 +536,177 @@ const resetPassword = asyncHandler(async (req, res) => {
   });
 });
 
+/**
+ * Verify email address
+ * POST /api/auth/verify-email
+ */
+const verifyEmail = asyncHandler(async (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ success: false, message: 'Token is required' });
+
+  const user = await User.findOne({
+    emailVerificationToken: token,
+    emailVerificationExpires: { $gt: Date.now() },
+  });
+
+  if (!user) return res.status(400).json({ success: false, message: 'Invalid or expired token' });
+
+  user.isEmailVerified = true;
+  user.emailVerificationToken = undefined;
+  user.emailVerificationExpires = undefined;
+  await user.save();
+
+  res.status(200).json({ success: true, message: 'Email verified successfully' });
+});
+
+/**
+ * Resend email verification
+ * POST /api/auth/resend-verification
+ */
+const resendVerification = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.userId);
+  if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+  if (user.isEmailVerified) return res.status(400).json({ success: false, message: 'Email already verified' });
+
+  const token = user.getEmailVerificationToken();
+  await user.save();
+
+  try {
+    await sendEmailVerificationEmail(
+      user.email, user.firstName,
+      `${process.env.FRONTEND_URL}/verify-email?token=${token}`
+    );
+  } catch (e) { /* non-fatal */ }
+
+  res.status(200).json({ success: true, message: 'Verification email sent' });
+});
+
+/**
+ * Verify 2FA code after login
+ * POST /api/auth/verify-2fa
+ */
+const verifyTwoFactor = asyncHandler(async (req, res) => {
+  const { userId, code } = req.body;
+  if (!userId || !code) return res.status(400).json({ success: false, message: 'userId and code are required' });
+
+  const user = await User.findById(userId).select('+twoFactorCode +twoFactorExpires');
+  if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+  if (!user.twoFactorCode || user.twoFactorExpires < Date.now()) {
+    return res.status(400).json({ success: false, message: '2FA code expired. Please login again.' });
+  }
+
+  if (user.twoFactorCode !== code) {
+    await user.incFailedLogins();
+    return res.status(401).json({ success: false, message: 'Invalid 2FA code' });
+  }
+
+  user.twoFactorCode = undefined;
+  user.twoFactorExpires = undefined;
+  await user.resetFailedLogins();
+
+  const { ip, userAgent, deviceId } = getRequestMeta(req);
+  await user.addLoginHistory({ ip, userAgent, deviceId, success: true });
+
+  const token = generateToken(user._id, user.role);
+  res.status(200).json({ success: true, message: 'Login successful', token, user: formatUser(user) });
+});
+
+/**
+ * Enable/disable 2FA
+ * POST /api/auth/2fa/toggle
+ */
+const toggleTwoFactor = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.userId);
+  if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+  user.twoFactorEnabled = !user.twoFactorEnabled;
+  await user.save();
+
+  res.status(200).json({
+    success: true,
+    message: `Two-factor authentication ${user.twoFactorEnabled ? 'enabled' : 'disabled'}`,
+    twoFactorEnabled: user.twoFactorEnabled,
+  });
+});
+
+/**
+ * Get login history
+ * GET /api/auth/login-history
+ */
+const getLoginHistory = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.userId).select('loginHistory lastLoginAt lastLoginIp');
+  if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+  res.status(200).json({ success: true, loginHistory: user.loginHistory });
+});
+
+/**
+ * Get trusted devices
+ * GET /api/auth/devices
+ */
+const getDevices = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.userId).select('trustedDevices');
+  if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+  res.status(200).json({ success: true, devices: user.trustedDevices });
+});
+
+/**
+ * Add trusted device
+ * POST /api/auth/devices
+ */
+const addDevice = asyncHandler(async (req, res) => {
+  const { deviceId, deviceName } = req.body;
+  if (!deviceId || !deviceName) {
+    return res.status(400).json({ success: false, message: 'deviceId and deviceName are required' });
+  }
+
+  const user = await User.findById(req.userId);
+  if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+  const { ip, userAgent } = getRequestMeta(req);
+  const exists = user.trustedDevices.find((d) => d.deviceId === deviceId);
+  if (!exists) {
+    user.trustedDevices.push({ deviceId, deviceName, userAgent, ip });
+    await user.save();
+  }
+
+  res.status(200).json({ success: true, message: 'Device added', devices: user.trustedDevices });
+});
+
+/**
+ * Remove trusted device
+ * DELETE /api/auth/devices/:deviceId
+ */
+const removeDevice = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.userId);
+  if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+  user.trustedDevices = user.trustedDevices.filter((d) => d.deviceId !== req.params.deviceId);
+  await user.save();
+
+  res.status(200).json({ success: true, message: 'Device removed', devices: user.trustedDevices });
+});
+
 module.exports = {
   registerUser,
   registerServiceProvider,
   loginUser,
+  loginWithPhone,
+  loginUnified,
   getCurrentUser,
   updateProfile,
   uploadProfileImage,
   changePassword,
   forgotPassword,
   resetPassword,
+  verifyEmail,
+  resendVerification,
+  verifyTwoFactor,
+  toggleTwoFactor,
+  getLoginHistory,
+  getDevices,
+  addDevice,
+  removeDevice,
 };
