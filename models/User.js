@@ -206,6 +206,17 @@ const userSchema = new mongoose.Schema(
         type: String,
         default: 'en',
       },
+      pushPrefs: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {
+          bookingUpdates: true,
+          paymentConfirmation: true,
+          bookingReminder: true,
+          cancellationAlert: true,
+          promotional: true,
+          newMessage: true,
+        },
+      },
     },
 
     // Verification Tokens
