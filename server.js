@@ -34,7 +34,17 @@ const scheduler = require('./utils/scheduler');
 const app = express();
 const httpServer = http.createServer(app);
 const io = new SocketIOServer(httpServer, {
-  cors: { origin: '*', methods: ['GET', 'POST'] },
+  cors: {
+    origin: [
+      'https://event-compass-theta.vercel.app',
+      'http://localhost:3000',
+      'http://localhost:19006',
+      'http://localhost:19007',
+      ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
+    ],
+    methods: ['GET', 'POST'],
+    credentials: true,
+  },
   transports: ['websocket', 'polling'],
 });
 
@@ -152,7 +162,25 @@ initializeDatabase().catch((error) => {
 
 // Middleware
 app.use(helmet()); // Security headers
-app.use(cors()); // Enable CORS
+
+const allowedOrigins = [
+  'https://event-compass-theta.vercel.app',
+  'http://localhost:3000',
+  'http://localhost:19006',
+  'http://localhost:19007',
+  ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, Postman)
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    callback(new Error(`CORS: origin ${origin} not allowed`));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
 app.use(morgan('dev')); // Logging
 
 // Rate limiting
