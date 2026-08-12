@@ -98,7 +98,7 @@ const initializeDatabase = async () => {
       console.log(`Default admin account created: ${process.env.ADMIN_EMAIL}`);
     }
 
-    if (process.env.NODE_ENV === 'development') {
+    {
       let demoProvider = await User.findOne({ email: 'provider@eventcompass.com' });
       if (!demoProvider) {
         demoProvider = await User.create({
@@ -120,68 +120,24 @@ const initializeDatabase = async () => {
       const serviceCount = await Service.countDocuments();
       if (serviceCount === 0) {
         await Service.insertMany([
-          {
-            name: 'Premium Event Planning Package',
-            description:
-              'Full-service event planning with vendor coordination, timeline management, and day-of execution.',
-            provider: demoProvider._id,
-            providerType: 'event_planner',
-            serviceType: 'Event Planning',
-            category: 'Planning',
-            pricing: {
-              basePrice: 250000,
-              unit: 'fixed',
-              currency: 'NGN',
-            },
-            availability: {
-              isAvailable: true,
-              leadTime: 14,
-              advanceBooking: 30,
-            },
-            coverageArea: {
-              states: ['Lagos', 'Abuja'],
-              nationwide: false,
-            },
-            images: [
-              {
-                url: 'https://images.unsplash.com/photo-1511795409834-ef04bbd61622?auto=format&fit=crop&w=1200&q=80',
-                isMain: true,
-              },
-            ],
-            isFeatured: true,
-            tags: ['wedding', 'corporate', 'planning'],
-          },
-          {
-            name: 'Elegant Venue Decoration',
-            description:
-              'Modern floral styling, table setting, stage backdrop, and ambient decor for premium events.',
-            provider: demoProvider._id,
-            providerType: 'event_planner',
-            serviceType: 'Decor',
-            category: 'Decoration',
-            pricing: {
-              basePrice: 180000,
-              unit: 'fixed',
-              currency: 'NGN',
-            },
-            availability: {
-              isAvailable: true,
-              leadTime: 7,
-              advanceBooking: 14,
-            },
-            coverageArea: {
-              states: ['Lagos'],
-              nationwide: false,
-            },
-            images: [
-              {
-                url: 'https://images.unsplash.com/photo-1464366400600-7168b8af9bc3?auto=format&fit=crop&w=1200&q=80',
-                isMain: true,
-              },
-            ],
-            isFeatured: true,
-            tags: ['decor', 'wedding', 'styling'],
-          },
+          { name: 'Premium Event Planning Package', description: 'Full-service event planning with vendor coordination, timeline management, and day-of execution.', provider: demoProvider._id, providerType: 'event_planner', serviceType: 'Event Planning', category: 'Event Planners and Managers', pricing: { basePrice: 250000, unit: 'fixed', currency: 'NGN' }, availability: { isAvailable: true }, images: [{ url: 'https://images.unsplash.com/photo-1511795409834-ef04bbd61622?auto=format&fit=crop&w=1200&q=80', isMain: true }], isFeatured: true, tags: ['wedding', 'corporate', 'planning'] },
+          { name: 'Corporate Event Management', description: 'End-to-end corporate event management including venue sourcing, logistics, and on-site coordination.', provider: demoProvider._id, providerType: 'event_planner', serviceType: 'Event Planning', category: 'Event Planners and Managers', pricing: { basePrice: 300000, unit: 'fixed', currency: 'NGN' }, availability: { isAvailable: true }, images: [{ url: 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?auto=format&fit=crop&w=1200&q=80', isMain: true }], isFeatured: false, tags: ['corporate', 'planning'] },
+          { name: 'Elegant Venue Decoration', description: 'Modern floral styling, table setting, stage backdrop, and ambient decor for premium events.', provider: demoProvider._id, providerType: 'event_planner', serviceType: 'Decor', category: 'Event Decorators', pricing: { basePrice: 180000, unit: 'fixed', currency: 'NGN' }, availability: { isAvailable: true }, images: [{ url: 'https://images.unsplash.com/photo-1464366400600-7168b8af9bc3?auto=format&fit=crop&w=1200&q=80', isMain: true }], isFeatured: true, tags: ['decor', 'wedding', 'styling'] },
+          { name: 'Floral & Balloon Decoration', description: 'Creative floral arrangements and balloon art for weddings, birthdays, and corporate events.', provider: demoProvider._id, providerType: 'event_planner', serviceType: 'Decor', category: 'Event Decorators', pricing: { basePrice: 95000, unit: 'fixed', currency: 'NGN' }, availability: { isAvailable: true }, images: [{ url: 'https://images.unsplash.com/photo-1478146059778-26028b07395a?auto=format&fit=crop&w=1200&q=80', isMain: true }], isFeatured: false, tags: ['decor', 'floral'] },
+          { name: 'Professional Event Photography', description: 'High-quality event photography with same-day preview and full gallery delivery within 7 days.', provider: demoProvider._id, providerType: 'events_service_provider', serviceType: 'Photography', category: 'Events Services Providers and Vendors', pricing: { basePrice: 120000, unit: 'fixed', currency: 'NGN' }, availability: { isAvailable: true }, images: [{ url: 'https://images.unsplash.com/photo-1606216794074-735e91aa2c92?auto=format&fit=crop&w=1200&q=80', isMain: true }], isFeatured: false, tags: ['photography', 'wedding'] },
+          { name: 'Authentic Nigerian Catering', description: 'Full catering service with authentic Nigerian cuisine, serving up to 500 guests.', provider: demoProvider._id, providerType: 'food_caterer', serviceType: 'Catering', category: 'Food Caterers', pricing: { basePrice: 350000, unit: 'fixed', currency: 'NGN' }, availability: { isAvailable: true }, images: [{ url: 'https://images.unsplash.com/photo-1555244162-803834f70033?auto=format&fit=crop&w=1200&q=80', isMain: true }], isFeatured: false, tags: ['catering', 'food', 'wedding'] },
+          { name: 'Continental Buffet Service', description: 'Premium continental buffet catering for corporate events and weddings, up to 300 guests.', provider: demoProvider._id, providerType: 'food_caterer', serviceType: 'Catering', category: 'Food Caterers', pricing: { basePrice: 280000, unit: 'fixed', currency: 'NGN' }, availability: { isAvailable: true }, images: [{ url: 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=crop&w=1200&q=80', isMain: true }], isFeatured: true, tags: ['catering', 'buffet'] },
+          { name: 'Live Band Entertainment', description: 'Professional live band for weddings, corporate events, and parties.', provider: demoProvider._id, providerType: 'music_dj_and_live_performance', serviceType: 'Live Band', category: 'Music (D-J and Live Performances)', pricing: { basePrice: 200000, unit: 'fixed', currency: 'NGN' }, availability: { isAvailable: true }, images: [{ url: 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?auto=format&fit=crop&w=1200&q=80', isMain: true }], isFeatured: true, tags: ['music', 'band'] },
+          { name: 'DJ Services & Sound System', description: 'Professional DJ with state-of-the-art sound system and lighting for any event.', provider: demoProvider._id, providerType: 'music_dj_and_live_performance', serviceType: 'DJ', category: 'Music (D-J and Live Performances)', pricing: { basePrice: 80000, unit: 'fixed', currency: 'NGN' }, availability: { isAvailable: true }, images: [{ url: 'https://images.unsplash.com/photo-1571266028243-e4733b0f0bb0?auto=format&fit=crop&w=1200&q=80', isMain: true }], isFeatured: false, tags: ['dj', 'music'] },
+          { name: 'Premium Event Venue - Victoria Island', description: 'Elegant event hall with capacity for 500 guests, full AV setup, and dedicated parking.', provider: demoProvider._id, providerType: 'events_venue_owner_and_manager', serviceType: 'Venue', category: 'Events Venues', pricing: { basePrice: 500000, unit: 'fixed', currency: 'NGN' }, availability: { isAvailable: true }, images: [{ url: 'https://images.unsplash.com/photo-1519167758481-83f550bb49b3?auto=format&fit=crop&w=1200&q=80', isMain: true }], isFeatured: true, tags: ['venue', 'hall', 'wedding'] },
+          { name: 'Outdoor Garden Venue', description: 'Beautiful outdoor garden venue for intimate events, capacity 150 guests.', provider: demoProvider._id, providerType: 'events_venue_owner_and_manager', serviceType: 'Venue', category: 'Events Venues', pricing: { basePrice: 200000, unit: 'fixed', currency: 'NGN' }, availability: { isAvailable: true }, images: [{ url: 'https://images.unsplash.com/photo-1464366400600-7168b8af9bc3?auto=format&fit=crop&w=1200&q=80', isMain: true }], isFeatured: false, tags: ['venue', 'outdoor'] },
+          { name: 'Bridal Makeup & Glam', description: 'Professional bridal makeup, hair styling, and full glam for the bride and bridal party.', provider: demoProvider._id, providerType: 'makeup_artist', serviceType: 'Makeup', category: 'Make-up Artists', pricing: { basePrice: 75000, unit: 'fixed', currency: 'NGN' }, availability: { isAvailable: true }, images: [{ url: 'https://images.unsplash.com/photo-1487412947147-5cebf100ffc2?auto=format&fit=crop&w=1200&q=80', isMain: true }], isFeatured: false, tags: ['makeup', 'bridal'] },
+          { name: '40x80 Canopy Tent Rental', description: 'Large 40x80 canopy tent rental with setup and takedown, suitable for 300+ guests.', provider: demoProvider._id, providerType: 'events_facilities_rental_and_hiring_company', serviceType: 'Canopy Rental', category: 'Canopies and Tent', pricing: { basePrice: 120000, unit: 'fixed', currency: 'NGN' }, availability: { isAvailable: true }, images: [{ url: 'https://images.unsplash.com/photo-1478146059778-26028b07395a?auto=format&fit=crop&w=1200&q=80', isMain: true }], isFeatured: false, tags: ['canopy', 'tent', 'rental'] },
+          { name: 'Chivalry Chair Rental (100 units)', description: 'Premium chivalry chair rental for weddings and formal events, 100-unit package.', provider: demoProvider._id, providerType: 'events_facilities_rental_and_hiring_company', serviceType: 'Chair Rental', category: 'Chairs', pricing: { basePrice: 50000, unit: 'fixed', currency: 'NGN' }, availability: { isAvailable: true }, images: [{ url: 'https://images.unsplash.com/photo-1506439773649-6e0eb8cfb237?auto=format&fit=crop&w=1200&q=80', isMain: true }], isFeatured: false, tags: ['chairs', 'rental'] },
+          { name: 'Banquet Table Rental (20 units)', description: 'Banquet table rental with linen covers, 20-unit package for events.', provider: demoProvider._id, providerType: 'events_facilities_rental_and_hiring_company', serviceType: 'Table Rental', category: 'Tables', pricing: { basePrice: 30000, unit: 'fixed', currency: 'NGN' }, availability: { isAvailable: true }, images: [{ url: 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=crop&w=1200&q=80', isMain: true }], isFeatured: false, tags: ['tables', 'rental'] },
+          { name: 'Drinks & Beverages Supply', description: 'Full drinks supply including soft drinks, water, and alcoholic beverages for events.', provider: demoProvider._id, providerType: 'drinks_supplier', serviceType: 'Drinks Supply', category: 'Drinks Suppliers', pricing: { basePrice: 150000, unit: 'fixed', currency: 'NGN' }, availability: { isAvailable: true }, images: [{ url: 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?auto=format&fit=crop&w=1200&q=80', isMain: true }], isFeatured: false, tags: ['drinks', 'beverages'] },
+          { name: 'Professional MC Services', description: 'Experienced MC for weddings, corporate events, and parties with bilingual capability.', provider: demoProvider._id, providerType: 'mc_and_compares', serviceType: 'MC', category: 'MCs and Compares', pricing: { basePrice: 60000, unit: 'fixed', currency: 'NGN' }, availability: { isAvailable: true }, images: [{ url: 'https://images.unsplash.com/photo-1475721027785-f74eccf877e2?auto=format&fit=crop&w=1200&q=80', isMain: true }], isFeatured: false, tags: ['mc', 'host'] },
+          { name: 'Stand-up Comedy & Entertainment', description: 'Professional comedian and entertainer for events, corporate shows, and parties.', provider: demoProvider._id, providerType: 'comedian_and_entertainer', serviceType: 'Comedy', category: 'Comedians and Entertainers', pricing: { basePrice: 100000, unit: 'fixed', currency: 'NGN' }, availability: { isAvailable: true }, images: [{ url: 'https://images.unsplash.com/photo-1527224857830-43a7acc85260?auto=format&fit=crop&w=1200&q=80', isMain: true }], isFeatured: false, tags: ['comedy', 'entertainment'] },
         ]);
         console.log('Demo services created');
       }
