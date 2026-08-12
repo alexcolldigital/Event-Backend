@@ -37,6 +37,10 @@ const createService = asyncHandler(async (req, res) => {
     });
   }
 
+  const isAdmin = req.user.role === 'admin';
+  const providerId = isAdmin ? (req.body.provider || req.userId) : req.userId;
+  const providerType = isAdmin ? (req.body.providerType || 'events_service_provider') : req.user.businessType;
+
   const service = new Service({
     name,
     description: fullDescription || description,
@@ -44,8 +48,8 @@ const createService = asyncHandler(async (req, res) => {
     serviceType,
     category,
     subCategory,
-    provider: req.userId,
-    providerType: req.user.businessType,
+    provider: providerId,
+    providerType,
     pricing: {
       basePrice: pricing?.basePrice || 0,
       unit: pricing?.unit || 'fixed',
@@ -166,8 +170,8 @@ const updateService = asyncHandler(async (req, res) => {
     });
   }
 
-  // Check if user is the provider
-  if (service.provider.toString() !== req.userId) {
+  // Check if user is the provider or admin
+  if (req.user.role !== 'admin' && service.provider.toString() !== req.userId) {
     return res.status(403).json({
       success: false,
       message: 'Not authorized to update this service',
@@ -200,8 +204,8 @@ const deleteService = asyncHandler(async (req, res) => {
     });
   }
 
-  // Check if user is the provider
-  if (service.provider.toString() !== req.userId) {
+  // Check if user is the provider or admin
+  if (req.user.role !== 'admin' && service.provider.toString() !== req.userId) {
     return res.status(403).json({
       success: false,
       message: 'Not authorized to delete this service',
@@ -279,7 +283,7 @@ const toggleAvailability = asyncHandler(async (req, res) => {
     });
   }
 
-  if (service.provider.toString() !== req.userId) {
+  if (req.user.role !== 'admin' && service.provider.toString() !== req.userId) {
     return res.status(403).json({
       success: false,
       message: 'Not authorized',
@@ -303,7 +307,7 @@ const uploadServiceMedia = asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: 'Service not found' });
   }
 
-  if (service.provider.toString() !== req.userId) {
+  if (req.user.role !== 'admin' && service.provider.toString() !== req.userId) {
     return res.status(403).json({ success: false, message: 'Not authorized to upload media for this service' });
   }
 
@@ -325,6 +329,43 @@ const uploadServiceMedia = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, message: 'Media uploaded successfully', images: uploadedImages });
 });
 
+/**
+ * Get public platform stats + category counts
+ * GET /api/services/stats
+ */
+const getPublicStats = asyncHandler(async (req, res) => {
+  const User = require('../models/User');
+  const Booking = require('../models/Booking');
+
+  const [completedBookings, verifiedVendors, totalClients, ratingAgg, categoryCounts] =
+    await Promise.all([
+      Booking.countDocuments({ status: 'completed' }),
+      User.countDocuments({ role: 'service_provider', isBusinessVerified: true }),
+      User.countDocuments({ role: 'client' }),
+      Service.aggregate([
+        { $match: { isActive: true, totalReviews: { $gt: 0 } } },
+        { $group: { _id: null, ratingSum: { $sum: { $multiply: ['$averageRating', '$totalReviews'] } }, total: { $sum: '$totalReviews' } } },
+      ]),
+      Service.aggregate([
+        { $match: { isActive: true } },
+        { $group: { _id: '$category', count: { $sum: 1 } } },
+      ]),
+    ]);
+
+  const categoryCountMap = {};
+  categoryCounts.forEach((c) => { if (c._id) categoryCountMap[c._id] = c.count; });
+
+  const averageRating = ratingAgg[0]?.total > 0
+    ? (ratingAgg[0].ratingSum / ratingAgg[0].total).toFixed(1)
+    : '0.0';
+
+  res.status(200).json({
+    success: true,
+    stats: { completedBookings, verifiedVendors, totalClients, averageRating },
+    categoryCountMap,
+  });
+});
+
 module.exports = {
   createService,
   getServices,
@@ -335,4 +376,5 @@ module.exports = {
   searchServices,
   toggleAvailability,
   uploadServiceMedia,
+  getPublicStats,
 };

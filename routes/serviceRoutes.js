@@ -6,8 +6,11 @@
 const express = require('express');
 const router = express.Router();
 const serviceController = require('../controllers/serviceController');
-const { authenticate, isServiceProvider } = require('../middleware/auth');
+const { authenticate, authorize } = require('../middleware/auth');
 const { createUploadMiddleware } = require('../utils/fileUpload');
+
+// Get public platform stats (public)
+router.get('/stats', serviceController.getPublicStats);
 
 // Get all services (public)
 router.get('/', serviceController.getServices);
@@ -16,16 +19,16 @@ router.get('/', serviceController.getServices);
 router.get('/search', serviceController.searchServices);
 
 // Get my services (private - service provider only)
-router.get('/provider/my-services', authenticate, isServiceProvider, serviceController.getMyServices);
+router.get('/provider/my-services', authenticate, authorize('service_provider'), serviceController.getMyServices);
 
-// Create new service (private - service provider only)
-router.post('/', authenticate, isServiceProvider, serviceController.createService);
+// Create new service (private - service provider or admin)
+router.post('/', authenticate, authorize('service_provider', 'admin'), serviceController.createService);
 
-// Upload service media (private - service provider only)
+// Upload service media (private - service provider or admin)
 router.post(
   '/:id/upload-media',
   authenticate,
-  isServiceProvider,
+  authorize('service_provider', 'admin'),
   createUploadMiddleware('services', 10),
   serviceController.uploadServiceMedia
 );
@@ -33,17 +36,17 @@ router.post(
 // Get service by ID (public)
 router.get('/:id', serviceController.getServiceById);
 
-// Update service (private - service provider only)
-router.put('/:id', authenticate, isServiceProvider, serviceController.updateService);
+// Update service (private - service provider or admin)
+router.put('/:id', authenticate, authorize('service_provider', 'admin'), serviceController.updateService);
 
-// Delete service (private - service provider only)
-router.delete('/:id', authenticate, isServiceProvider, serviceController.deleteService);
+// Delete service (private - service provider or admin)
+router.delete('/:id', authenticate, authorize('service_provider', 'admin'), serviceController.deleteService);
 
-// Toggle availability (private - service provider only)
+// Toggle availability (private - service provider or admin)
 router.patch(
   '/:id/toggle-availability',
   authenticate,
-  isServiceProvider,
+  authorize('service_provider', 'admin'),
   serviceController.toggleAvailability
 );
 

@@ -38,21 +38,23 @@ const logAudit = async (req, action, resource, resourceId, details, status = 'su
 // ─── COMMISSION MANAGEMENT ───────────────────────────────────────────────────
 
 const getCommissionSettings = asyncHandler(async (req, res) => {
-  const settings = await PlatformSetting.findOne({}) || {};
-  res.json({ success: true, commission: settings });
+  const rows = await PlatformSetting.find({ key: { $in: ['commissionRate', 'minCommission', 'maxCommission', 'payoutSchedule'] } });
+  const commission = rows.reduce((acc, r) => { acc[r.key] = r.value; return acc; }, {});
+  res.json({ success: true, commission });
 });
 
 const updateCommissionSettings = asyncHandler(async (req, res) => {
   const { commissionRate, minCommission, maxCommission, payoutSchedule } = req.body;
-  let settings = await PlatformSetting.findOne({});
-  if (!settings) settings = new PlatformSetting({});
-  if (commissionRate !== undefined) settings.commissionRate = commissionRate;
-  if (minCommission !== undefined) settings.minCommission = minCommission;
-  if (maxCommission !== undefined) settings.maxCommission = maxCommission;
-  if (payoutSchedule !== undefined) settings.payoutSchedule = payoutSchedule;
-  await settings.save();
-  await logAudit(req, 'UPDATE_COMMISSION', 'PlatformSetting', settings._id, req.body);
-  res.json({ success: true, message: 'Commission settings updated', commission: settings });
+  const updates = { commissionRate, minCommission, maxCommission, payoutSchedule };
+  for (const [key, value] of Object.entries(updates)) {
+    if (value !== undefined) {
+      await PlatformSetting.findOneAndUpdate({ key }, { key, value }, { upsert: true, new: true });
+    }
+  }
+  const rows = await PlatformSetting.find({ key: { $in: ['commissionRate', 'minCommission', 'maxCommission', 'payoutSchedule'] } });
+  const commission = rows.reduce((acc, r) => { acc[r.key] = r.value; return acc; }, {});
+  await logAudit(req, 'UPDATE_COMMISSION', 'PlatformSetting', null, req.body);
+  res.json({ success: true, message: 'Commission settings updated', commission });
 });
 
 const getCommissionBreakdown = asyncHandler(async (req, res) => {
@@ -155,17 +157,19 @@ const rejectRefund = asyncHandler(async (req, res) => {
 const getFlaggedReviews = asyncHandler(async (req, res) => {
   const { page = 1, limit = 20 } = req.query;
   const skip = (page - 1) * limit;
-  const query = { isFlagged: true };
+  const query = { status: 'pending' };
   const [reviews, total] = await Promise.all([
     Review.find(query)
       .populate('reviewer', 'firstName lastName email')
-      .populate('service', 'name')
+      .populate('reviewedEntity')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit)),
     Review.countDocuments(query),
   ]);
-  res.json({ success: true, reviews, pagination: { current: +page, limit: +limit, total, pages: Math.ceil(total / limit) } });
+  // Normalize for frontend: attach service field from reviewedEntity
+  const normalized = reviews.map(r => ({ ...r.toObject(), service: r.reviewedEntity, comment: r.review }));
+  res.json({ success: true, reviews: normalized, pagination: { current: +page, limit: +limit, total, pages: Math.ceil(total / limit) } });
 });
 
 const moderateReview = asyncHandler(async (req, res) => {
@@ -174,10 +178,11 @@ const moderateReview = asyncHandler(async (req, res) => {
   const review = await Review.findById(id);
   if (!review) return res.status(404).json({ success: false, message: 'Review not found' });
   if (action === 'remove') {
+    review.status = 'rejected';
     review.isVisible = false;
-    review.moderationNote = reason;
+    review.moderatorComment = reason;
   } else {
-    review.isFlagged = false;
+    review.status = 'approved';
     review.isVisible = true;
   }
   await review.save();
