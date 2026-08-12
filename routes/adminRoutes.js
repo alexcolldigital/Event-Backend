@@ -31,7 +31,7 @@ router.put('/services/:id', adminController.updateService);
 router.delete('/services/:id', adminController.deleteService);
 router.patch('/services/:id/toggle-featured', adminController.toggleFeatured);
 router.patch('/services/:id/toggle-active', adminController.toggleActive);
-router.post('/services/:id/upload-media', createUploadMiddleware('services', 10), adminController.uploadServiceMedia);
+router.post('/services/:id/upload-media', createUploadMiddleware('services', 12), adminController.uploadServiceMedia);
 
 // Bookings management
 router.get('/bookings', adminController.getAllBookings);

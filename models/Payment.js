@@ -13,11 +13,11 @@ const paymentSchema = new mongoose.Schema(
     payeeAmount: Number,
     paymentMethod: {
       type: String,
-      enum: ['stripe', 'bank_transfer', 'card', 'wallet', 'paystack'],
+      enum: ['paystack', 'flutterwave', 'bank_transfer', 'card', 'wallet'],
       required: true,
     },
-    stripePaymentIntentId: String,
     paystackReference: String,
+    flutterwaveReference: String,
     bankTransferId: String,
     cardLast4: String,
     status: {

@@ -9,7 +9,6 @@ const Service = require('../models/Service');
 const Payment = require('../models/Payment');
 const Analytics = require('../models/Analytics');
 const { asyncHandler } = require('../middleware/errorHandler');
-const { uploadToCloudinary } = require('../utils/fileUpload');
 const { BOOKING_STATUS, PAYMENT_STATUS } = require('../config/constants');
 
 /**
@@ -603,11 +602,11 @@ const uploadServiceMedia = asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, message: 'At least one image is required' });
   }
 
-  const uploadedImages = [];
-  for (const file of req.files) {
-    const uploaded = await uploadToCloudinary(file, 'services');
-    uploadedImages.push({ url: uploaded.url, publicId: uploaded.publicId, isMain: false });
-  }
+  const uploadedImages = req.files.map((file) => ({
+    url: file.path,
+    publicId: file.filename,
+    isMain: false,
+  }));
 
   service.images = [...(service.images || []), ...uploadedImages];
   if (!service.media) service.media = {};

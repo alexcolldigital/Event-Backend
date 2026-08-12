@@ -481,7 +481,7 @@ const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
 
   booking.payment.status = PAYMENT_STATUS.COMPLETED;
   booking.payment.paymentDate = new Date();
-  booking.payment.method = booking.payment.method || 'stripe';
+  booking.payment.method = booking.payment.method || 'paystack';
   booking.escrow.enabled = booking.escrow?.enabled ?? true;
   booking.escrow.status = booking.escrow?.enabled ? 'active' : 'inactive';
   booking.escrow.releaseStatus = 'held';
