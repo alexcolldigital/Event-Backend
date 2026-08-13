@@ -38,6 +38,7 @@ const io = new SocketIOServer(httpServer, {
     origin: [
       'https://event-compass-theta.vercel.app',
       'http://localhost:3000',
+      'http://localhost:3001',
       'http://localhost:19006',
       'http://localhost:19007',
       ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
@@ -166,6 +167,7 @@ app.use(helmet()); // Security headers
 const allowedOrigins = [
   'https://event-compass-theta.vercel.app',
   'http://localhost:3000',
+  'http://localhost:3001',
   'http://localhost:19006',
   'http://localhost:19007',
   ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
@@ -314,14 +316,16 @@ const startServer = (port = PORT) => {
   return server;
 };
 
-startServer(PORT);
+if (process.env.NODE_ENV !== 'test') {
+  startServer(PORT);
 
-// Start background schedulers (expired acceptances, auto-releases)
-try {
-  scheduler.startSchedulers();
-  console.log('Scheduler started: processExpiredAcceptances and auto-releases');
-} catch (e) {
-  console.warn('Failed to start scheduler', e.message || e);
+  // Start background schedulers (expired acceptances, auto-releases)
+  try {
+    scheduler.startSchedulers();
+    console.log('Scheduler started: processExpiredAcceptances and auto-releases');
+  } catch (e) {
+    console.warn('Failed to start scheduler', e.message || e);
+  }
 }
 
 // Handle graceful shutdown

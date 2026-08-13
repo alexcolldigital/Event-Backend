@@ -87,14 +87,12 @@ const registerUser = asyncHandler(async (req, res) => {
 
   const token = generateToken(user._id, user.role);
 
-  try {
-    await sendEmailVerificationEmail(
-      email, firstName,
-      `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`
-    );
-  } catch (emailErr) {
+  sendEmailVerificationEmail(
+    email, firstName,
+    `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`
+  ).catch((emailErr) => {
     console.error('Verification email failed (non-fatal):', emailErr.message);
-  }
+  });
 
   res.status(201).json({
     success: true,
