@@ -123,6 +123,96 @@ const getAllUsers = asyncHandler(async (req, res) => {
 });
 
 /**
+ * Create a new user by admin
+ * POST /api/admin/users
+ */
+const createUser = asyncHandler(async (req, res) => {
+  const {
+    firstName,
+    lastName,
+    email,
+    phoneNumber,
+    password,
+    passwordConfirm,
+    role,
+    businessName,
+    businessType,
+    businessDescription,
+  } = req.body;
+
+  if (!firstName || !lastName || !email || !phoneNumber || !password) {
+    return res.status(400).json({
+      success: false,
+      message: 'First name, last name, email, phone number, and password are required',
+    });
+  }
+
+  if (password.length < 6) {
+    return res.status(400).json({
+      success: false,
+      message: 'Password must be at least 6 characters long',
+    });
+  }
+
+  if (password !== passwordConfirm) {
+    return res.status(400).json({
+      success: false,
+      message: 'Passwords do not match',
+    });
+  }
+
+  const normalizedRole = role || 'client';
+  const validRoles = ['admin', 'service_provider', 'client'];
+
+  if (!validRoles.includes(normalizedRole)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Role must be one of: admin, service_provider, client',
+    });
+  }
+
+  const existingUser = await User.findOne({ email: email.toLowerCase() });
+  if (existingUser) {
+    return res.status(400).json({
+      success: false,
+      message: 'Email already in use',
+    });
+  }
+
+  const existingPhone = await User.findOne({ phoneNumber });
+  if (existingPhone) {
+    return res.status(400).json({
+      success: false,
+      message: 'Phone number already in use',
+    });
+  }
+
+  const user = new User({
+    firstName,
+    lastName,
+    email: email.toLowerCase(),
+    phoneNumber,
+    password,
+    role: normalizedRole,
+    businessName: businessName || undefined,
+    businessType: businessType || undefined,
+    businessDescription: businessDescription || undefined,
+    isEmailVerified: true,
+    isPhoneVerified: true,
+    isVerified: true,
+    isActive: true,
+  });
+
+  await user.save();
+
+  res.status(201).json({
+    success: true,
+    message: 'User created successfully',
+    user: user.toJSON(),
+  });
+});
+
+/**
  * Block/Unblock user
  * PATCH /api/admin/users/:id/block
  */
@@ -704,6 +794,7 @@ const assignRole = asyncHandler(async (req, res) => {
 module.exports = {
   getDashboardStats,
   getAllUsers,
+  createUser,
   blockUser,
   assignRole,
   verifyServiceProvider,

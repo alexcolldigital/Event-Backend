@@ -19,6 +19,7 @@ router.get('/dashboard', adminController.getDashboardStats);
 
 // Users management
 router.get('/users', adminController.getAllUsers);
+router.post('/users', adminController.createUser);
 router.get('/users/analytics/breakdown', adminController.getUserAnalytics);
 router.patch('/users/:id/block', adminController.blockUser);
 router.patch('/users/:id/verify', adminController.verifyServiceProvider);
