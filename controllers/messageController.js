@@ -86,10 +86,10 @@ const sendMessage = asyncHandler(async (req, res) => {
 
   // Push new message notification (non-blocking)
   try {
-    if (receiver.fcmToken && receiver.preferences?.notifications !== false) {
+    if (receiver.fcmToken) {
       const senderName = `${message.sender.firstName} ${message.sender.lastName}`;
       const preview = messageContent.length > 60 ? messageContent.slice(0, 60) + '…' : messageContent;
-      push.notifyNewMessage(receiver.fcmToken, senderName, preview);
+      push.notifyNewMessage(receiver, senderName, preview);
     }
   } catch (_) {}
 

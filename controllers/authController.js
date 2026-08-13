@@ -689,6 +689,16 @@ const removeDevice = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, message: 'Device removed', devices: user.trustedDevices });
 });
 
+/**
+ * Get admin contact list (for messaging support)
+ * GET /api/auth/admin-contacts
+ */
+const getAdminContacts = asyncHandler(async (req, res) => {
+  const admins = await User.find({ role: USER_ROLES.ADMIN })
+    .select('_id firstName lastName profileImage role');
+  res.status(200).json({ success: true, admins });
+});
+
 module.exports = {
   registerUser,
   registerServiceProvider,
@@ -709,4 +719,5 @@ module.exports = {
   getDevices,
   addDevice,
   removeDevice,
+  getAdminContacts,
 };

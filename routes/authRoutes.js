@@ -171,6 +171,9 @@ router.post(
   authController.resetPassword
 );
 
+// Get admin contacts (for messaging support)
+router.get('/admin-contacts', authenticate, authController.getAdminContacts);
+
 // FCM token registration
 router.post(
   '/fcm-token',

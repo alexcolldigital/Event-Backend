@@ -464,7 +464,7 @@ const sendNotification = asyncHandler(async (req, res) => {
       users = await User.find({ fcmToken: { $ne: null }, 'preferences.notifications': { $ne: false } });
     }
     await Promise.allSettled(
-      users.map((u) => push.notifyPromotion(u.fcmToken, notification.title, notification.message))
+      users.map((u) => push.notifyPromotion(u, notification.title, notification.message))
     );
   } catch (pushErr) {
     console.error('Notification push failed (non-fatal):', pushErr.message);

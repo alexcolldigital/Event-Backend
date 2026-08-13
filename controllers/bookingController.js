@@ -493,8 +493,7 @@ const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
   try {
     const User = require('../models/User');
     const client = await User.findById(booking.client);
-    if (client?.fcmToken && client.preferences?.notifications !== false)
-      push.notifyPaymentConfirmation(client.fcmToken, booking);
+    push.notifyPaymentConfirmation(client, booking);
   } catch (_) {}
 
   res.status(200).json({
@@ -626,9 +625,7 @@ const confirmBooking = asyncHandler(async (req, res) => {
           status: booking.status,
         });
       }
-      if (client.fcmToken && client.preferences?.notifications !== false) {
-        await push.notifyBookingUpdate(client.fcmToken, booking);
-      }
+      push.notifyBookingUpdate(client, booking);
     }
   } catch (emailErr) {
     console.error('Booking confirmation notification failed (non-fatal):', emailErr.message || emailErr);
@@ -702,10 +699,8 @@ const cancelBooking = asyncHandler(async (req, res) => {
       User.findById(booking.client),
       User.findById(booking.serviceProvider),
     ]);
-    if (client?.fcmToken && client.preferences?.notifications !== false)
-      push.notifyCancellation(client.fcmToken, booking);
-    if (provider?.fcmToken && provider.preferences?.notifications !== false)
-      push.notifyCancellation(provider.fcmToken, booking);
+    push.notifyCancellation(client, booking);
+    push.notifyCancellation(provider, booking);
   } catch (_) {}
 
   res.status(200).json({
@@ -752,8 +747,7 @@ const completeBooking = asyncHandler(async (req, res) => {
   try {
     const User = require('../models/User');
     const client = await User.findById(booking.client);
-    if (client?.fcmToken && client.preferences?.notifications !== false)
-      push.notifyBookingUpdate(client.fcmToken, booking);
+    push.notifyBookingUpdate(client, booking);
   } catch (_) {}
 
   res.status(200).json({
@@ -877,8 +871,7 @@ const handlePaystackWebhookRaw = async (req, res) => {
       try {
         const User = require('../models/User');
         const client = await User.findById(booking.client);
-        if (client?.fcmToken && client.preferences?.notifications !== false)
-          require('../utils/pushNotification').notifyPaymentConfirmation(client.fcmToken, booking);
+        require('../utils/pushNotification').notifyPaymentConfirmation(client, booking);
       } catch (_) {}
     }
 

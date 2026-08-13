@@ -43,8 +43,7 @@ const processExpiredAcceptances = async () => {
       // Push cancellation alert to client
       try {
         const client = await User.findById(booking.client);
-        if (client?.fcmToken && client.preferences?.notifications !== false)
-          push.notifyCancellation(client.fcmToken, booking);
+        push.notifyCancellation(client, booking);
       } catch (_) {}
     }
   } catch (err) {
@@ -99,8 +98,7 @@ const processAutoReleases = async () => {
         // Push booking update to client
         try {
           const client = await User.findById(booking.client);
-          if (client?.fcmToken && client.preferences?.notifications !== false)
-            push.notifyBookingUpdate(client.fcmToken, booking);
+          push.notifyBookingUpdate(client, booking);
         } catch (_) {}
       } catch (err) {
         payout.status = 'failed';
@@ -129,8 +127,7 @@ const processBookingReminders = async () => {
     for (const booking of bookings) {
       try {
         const client = await User.findById(booking.client);
-        if (client?.fcmToken && client.preferences?.notifications !== false)
-          await push.notifyBookingReminder(client.fcmToken, booking);
+        await push.notifyBookingReminder(client, booking);
         booking.reminderSent = true;
         await booking.save();
       } catch (err) {
