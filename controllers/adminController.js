@@ -676,10 +676,36 @@ const adminCompleteBooking = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, message: 'Booking completed by admin', booking });
 });
 
+/**
+ * Assign role to user
+ * PATCH /api/admin/users/:id/role
+ */
+const assignRole = asyncHandler(async (req, res) => {
+  const { role } = req.body;
+  const validRoles = ['admin', 'service_provider', 'client'];
+
+  if (!role || !validRoles.includes(role)) {
+    return res.status(400).json({ success: false, message: `Role must be one of: ${validRoles.join(', ')}` });
+  }
+
+  const user = await User.findById(req.params.id);
+  if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+  if (user._id.toString() === req.userId) {
+    return res.status(400).json({ success: false, message: 'Cannot change your own role' });
+  }
+
+  user.role = role;
+  await user.save();
+
+  res.status(200).json({ success: true, message: `User role updated to ${role}`, user });
+});
+
 module.exports = {
   getDashboardStats,
   getAllUsers,
   blockUser,
+  assignRole,
   verifyServiceProvider,
   getAllBookings,
   adminConfirmBooking,

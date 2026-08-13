@@ -22,6 +22,7 @@ router.get('/users', adminController.getAllUsers);
 router.get('/users/analytics/breakdown', adminController.getUserAnalytics);
 router.patch('/users/:id/block', adminController.blockUser);
 router.patch('/users/:id/verify', adminController.verifyServiceProvider);
+router.patch('/users/:id/role', adminController.assignRole);
 
 // Services management
 router.get('/services', adminController.getAllServices);
