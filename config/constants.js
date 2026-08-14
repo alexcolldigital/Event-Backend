@@ -314,6 +314,7 @@ const PAYMENT_STATUS = {
 const BOOKING_STATUS = {
   PENDING: 'pending',
   CONFIRMED: 'confirmed',
+  REJECTED: 'rejected',
   CANCELLED: 'cancelled',
   COMPLETED: 'completed',
 };

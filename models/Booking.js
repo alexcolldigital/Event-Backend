@@ -146,7 +146,6 @@ const bookingSchema = new mongoose.Schema(
     reminderScheduled: { type: Boolean, default: false },
     reminderSentAt: Date,
 
-    // Status
     status: {
       type: String,
       enum: Object.values(BOOKING_STATUS),
@@ -241,6 +240,9 @@ const bookingSchema = new mongoose.Schema(
       ratedBy: mongoose.Schema.Types.ObjectId,
       ratedAt: Date,
     },
+
+    // Admin decision
+    adminNote: String, // acceptance message or rejection reason shown to client
 
     // Metadata
     reminderSent: Boolean,

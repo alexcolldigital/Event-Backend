@@ -728,6 +728,7 @@ const getBookingById = asyncHandler(async (req, res) => {
  * PATCH /api/admin/bookings/:id/confirm
  */
 const adminConfirmBooking = asyncHandler(async (req, res) => {
+  const { message } = req.body;
   const booking = await Booking.findById(req.params.id);
   if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
   if (booking.status !== BOOKING_STATUS.PENDING)
@@ -735,9 +736,46 @@ const adminConfirmBooking = asyncHandler(async (req, res) => {
 
   booking.status = BOOKING_STATUS.CONFIRMED;
   booking.confirmedDate = new Date();
+  if (message) booking.adminNote = message;
   await booking.save();
 
+  // Notify client (non-blocking)
+  try {
+    const User = require('../models/User');
+    const client = await User.findById(booking.client);
+    if (client) require('../utils/pushNotification').notifyBookingUpdate(client, booking);
+  } catch (_) {}
+
   res.status(200).json({ success: true, message: 'Booking confirmed by admin', booking });
+});
+
+/**
+ * Admin reject booking
+ * PATCH /api/admin/bookings/:id/reject
+ */
+const adminRejectBooking = asyncHandler(async (req, res) => {
+  const { reason } = req.body;
+  if (!reason || !reason.trim())
+    return res.status(400).json({ success: false, message: 'Rejection reason is required' });
+
+  const booking = await Booking.findById(req.params.id);
+  if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+  if (booking.status !== BOOKING_STATUS.PENDING)
+    return res.status(400).json({ success: false, message: 'Can only reject pending bookings' });
+
+  booking.status = BOOKING_STATUS.REJECTED;
+  booking.cancelledDate = new Date();
+  booking.adminNote = reason.trim();
+  await booking.save();
+
+  // Notify client (non-blocking)
+  try {
+    const User = require('../models/User');
+    const client = await User.findById(booking.client);
+    if (client) require('../utils/pushNotification').notifyBookingUpdate(client, booking);
+  } catch (_) {}
+
+  res.status(200).json({ success: true, message: 'Booking rejected', booking });
 });
 
 /**
@@ -817,6 +855,7 @@ module.exports = {
   verifyServiceProvider,
   getAllBookings,
   adminConfirmBooking,
+  adminRejectBooking,
   adminCancelBooking,
   adminCompleteBooking,
   getRevenueAnalytics,

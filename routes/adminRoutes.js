@@ -39,6 +39,7 @@ router.post('/services/:id/upload-media', createUploadMiddleware('services', 12)
 router.get('/bookings', adminController.getAllBookings);
 router.get('/bookings/:id', adminController.getBookingById);
 router.patch('/bookings/:id/confirm', adminController.adminConfirmBooking);
+router.patch('/bookings/:id/reject', adminController.adminRejectBooking);
 router.patch('/bookings/:id/cancel', adminController.adminCancelBooking);
 router.patch('/bookings/:id/complete', adminController.adminCompleteBooking);
 
