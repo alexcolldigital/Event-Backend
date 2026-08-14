@@ -45,6 +45,10 @@ const serviceSchema = new mongoose.Schema(
     subCategory: String,
 
     // Pricing
+    priceOnRequest: {
+      type: Boolean,
+      default: false,
+    },
     pricing: {
       basePrice: Number,
       pricePerUnit: Number,

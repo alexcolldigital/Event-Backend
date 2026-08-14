@@ -14,27 +14,17 @@ const processExpiredAcceptances = async () => {
       status: BOOKING_STATUS.PENDING,
       vendorAcceptDeadline: { $lte: now },
       'payment.status': PAYMENT_STATUS.COMPLETED,
-      escrowStatus: 'held',
     });
 
     for (const booking of bookings) {
       booking.status = BOOKING_STATUS.CANCELLED;
       booking.cancelledDate = new Date();
       booking.cancellationReason = 'Provider did not respond in time';
-
-      const refundDecision = require('./escrow').getEscrowRefundDecision({
-        amount: booking.pricing?.totalAmount || 0,
-        eventDate: booking.eventDate,
-        cancelledAt: new Date(),
-        enabled: true,
-      });
+      booking.payment.refundStatus = 'pending';
 
       try {
-        await gateway.refund({ booking, amount: refundDecision.refundAmount });
-        booking.payment.refundStatus = refundDecision.refundAmount > 0 ? 'completed' : 'none';
-        booking.payment.refundAmount = refundDecision.refundAmount;
-        booking.escrow.refundPolicy = refundDecision.reason;
-        booking.escrow.releaseStatus = 'refunded';
+        await gateway.refund({ booking, amount: booking.pricing?.totalAmount || 0 });
+        booking.payment.refundStatus = 'completed';
       } catch (err) {
         booking.payment.refundStatus = 'pending';
       }
@@ -58,12 +48,10 @@ const processAutoReleases = async () => {
     const bookings = await Booking.find({
       status: BOOKING_STATUS.CONFIRMED,
       autoReleaseAt: { $lte: now },
-      escrowStatus: 'held',
+      'payment.status': PAYMENT_STATUS.COMPLETED,
     });
 
     for (const booking of bookings) {
-      if (booking.escrow && booking.escrow.releaseStatus === 'disputed') continue;
-
       const commissionSetting = await PlatformSetting.findOne({ key: 'commissionPercentage' });
       const commissionPercent = (commissionSetting && Number(commissionSetting.value)) || 10;
       const commission = Math.round(((booking.pricing?.totalAmount || 0) * commissionPercent) / 100);
@@ -92,8 +80,6 @@ const processAutoReleases = async () => {
 
         booking.status = BOOKING_STATUS.COMPLETED;
         booking.completedDate = new Date();
-        booking.escrow.releaseStatus = 'released';
-        booking.escrow.releaseDate = new Date();
         await booking.save();
 
         // Push booking update to client

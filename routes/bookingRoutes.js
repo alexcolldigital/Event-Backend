@@ -35,14 +35,8 @@ router.get('/:id', authenticate, bookingController.getBookingById);
 // Create payment session for booking (private)
 router.post('/:id/payment-session', authenticate, bookingController.createBookingPaymentSession);
 
-// Mark booking payment as successful and escrowed (private)
+// Mark booking payment as successful (private)
 router.post('/:id/payment-success', authenticate, bookingController.markBookingPaymentSuccess);
-
-// Release escrow funds to the provider (private - provider only)
-router.patch('/:id/release-escrow', authenticate, bookingController.releaseEscrow);
-
-// Raise a dispute on escrow funds (private)
-router.patch('/:id/dispute-escrow', authenticate, bookingController.disputeEscrow);
 
 // Confirm booking (private - provider only)
 router.patch('/:id/confirm', authenticate, bookingController.confirmBooking);

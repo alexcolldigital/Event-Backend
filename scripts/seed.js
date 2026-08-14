@@ -219,11 +219,17 @@ const run = async () => {
   }
 
   // ── Platform Settings ──────────────────────────────────────────────────────
-  const settings = await PlatformSetting.findOne({});
-  if (!settings) {
-    await PlatformSetting.create({ commissionRate: 10, minCommission: 500, maxCommission: 50000, payoutSchedule: 'weekly' });
-    console.log('Platform settings created');
+  const defaultPlatformSettings = [
+    { key: 'commissionRate', value: 10, description: 'Platform commission rate (%)' },
+    { key: 'minCommission', value: 500, description: 'Minimum commission amount (₦)' },
+    { key: 'maxCommission', value: 50000, description: 'Maximum commission amount (₦)' },
+    { key: 'payoutSchedule', value: 'weekly', description: 'Provider payout schedule' },
+    { key: 'serviceFeePercentage', value: 10, description: 'Service & delivery fee charged to clients (%)' },
+  ];
+  for (const s of defaultPlatformSettings) {
+    await PlatformSetting.findOneAndUpdate({ key: s.key }, s, { upsert: true, new: true });
   }
+  console.log('Platform settings seeded');
 
   // ── Coupons ────────────────────────────────────────────────────────────────
   const couponData = [

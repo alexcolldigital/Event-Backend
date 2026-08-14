@@ -536,7 +536,7 @@ const createService = asyncHandler(async (req, res) => {
   }
 
   // If provider is not specified, use a default admin user or require it
-  const serviceProvider = provider || req.userId;
+  const serviceProvider = (provider && provider.trim()) ? provider : req.userId;
 
   const service = new Service({
     name,
@@ -726,13 +726,41 @@ const getBookingById = asyncHandler(async (req, res) => {
 /**
  * Admin confirm booking
  * PATCH /api/admin/bookings/:id/confirm
+ * Body: { message, adminSetPrices: [{ serviceId, serviceName, price }] }
  */
 const adminConfirmBooking = asyncHandler(async (req, res) => {
-  const { message } = req.body;
-  const booking = await Booking.findById(req.params.id);
+  const { message, adminSetPrices } = req.body;
+  const booking = await Booking.findById(req.params.id).populate('service');
   if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
   if (booking.status !== BOOKING_STATUS.PENDING)
     return res.status(400).json({ success: false, message: 'Can only confirm pending bookings' });
+
+  // If admin provided prices for no-price services, recalculate totals
+  if (adminSetPrices && adminSetPrices.length > 0) {
+    booking.adminSetPrices = adminSetPrices;
+    const extraCost = adminSetPrices.reduce((sum, s) => sum + (Number(s.price) || 0), 0);
+    const PlatformSetting = require('../models/PlatformSetting');
+    const feeSetting = await PlatformSetting.findOne({ key: 'serviceFeePercentage' });
+    const feeRate = feeSetting ? Number(feeSetting.value) / 100 : 0.10;
+    const newSubtotal = (booking.pricing.subtotal || 0) + extraCost;
+    const newTax = newSubtotal * feeRate;
+    const newTotal = newSubtotal + newTax;
+    booking.pricing.subtotal = newSubtotal;
+    booking.pricing.tax = newTax;
+    booking.pricing.totalAmount = newTotal;
+    // Recalculate deposit/balance if split plan
+    const { PAYMENT_PLAN } = require('../config/constants');
+    if (booking.paymentPlan === PAYMENT_PLAN.SPLIT_50_50) {
+      booking.depositAmount = newTotal / 2;
+      booking.balanceDue = newTotal / 2;
+    } else if (booking.paymentPlan === PAYMENT_PLAN.DEPOSIT_20) {
+      booking.depositAmount = newTotal * 0.2;
+      booking.balanceDue = newTotal * 0.8;
+    } else {
+      booking.depositAmount = newTotal;
+      booking.balanceDue = 0;
+    }
+  }
 
   booking.status = BOOKING_STATUS.CONFIRMED;
   booking.confirmedDate = new Date();

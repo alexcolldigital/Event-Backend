@@ -11,7 +11,6 @@ const { sendBookingConfirmationEmail, sendDepositPaidEmail, sendBalanceDueRemind
 const { isBookingWithinCoverage } = require('../utils/locationMatcher');
 const { buildCartCheckoutPayloads } = require('../utils/cartCheckout');
 const { buildCheckoutSessionPayload } = require('../utils/payment');
-const { normalizeEscrowOptions, getEscrowRefundDecision, releaseEscrowFunds, markEscrowDisputed } = require('../utils/escrow');
 const gateway = require('../utils/gateway');
 const PlatformSetting = require('../models/PlatformSetting');
 const Payout = require('../models/Payout');
@@ -34,7 +33,6 @@ const createBooking = asyncHandler(async (req, res) => {
     specialRequirements,
     clientNotes,
     bookingLocation,
-    escrow: escrowInput,
     paymentPlan,
     instantBooking,
     bookingRequestNote,
@@ -76,33 +74,18 @@ const createBooking = asyncHandler(async (req, res) => {
     }
 
     serviceProvider = service.provider;
-    pricing = {
-      basePrice: service.pricing.basePrice,
-      quantity: numberOfGuests || 1,
-      unitPrice: service.pricing.basePrice,
-      subtotal: service.pricing.basePrice * (numberOfGuests || 1),
-    };
-  } else {
-    const Venue = require('../models/Venue');
-    const venue = await Venue.findById(venueId);
-    if (!venue) {
-      return res.status(404).json({ success: false, message: 'Venue not found' });
+    if (service.priceOnRequest) {
+      pricing = { basePrice: 0, quantity: numberOfGuests || 1, unitPrice: 0, subtotal: 0, priceOnRequest: true };
+    } else {
+      pricing = {
+        basePrice: service.pricing.basePrice,
+        quantity: numberOfGuests || 1,
+        unitPrice: service.pricing.basePrice,
+        subtotal: service.pricing.basePrice * (numberOfGuests || 1),
+      };
     }
-    serviceProvider = venue.owner;
-    pricing = {
-      basePrice: venue.rentalPrice.daily || venue.rentalPrice.hourly,
-      quantity: duration || 1,
-      unitPrice: venue.rentalPrice.daily || venue.rentalPrice.hourly,
-      subtotal: (venue.rentalPrice.daily || venue.rentalPrice.hourly) * (duration || 1),
-    };
-  }
-
-  // Calculate total with tax
-  const tax = pricing.subtotal ? pricing.subtotal * 0.075 : 0; // 7.5% tax
-  const totalAmount = pricing.subtotal + tax;
 
   const bookingNumber = `EC-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-  const escrow = normalizeEscrowOptions(escrowInput);
 
   // vendor accept deadline (default 24 hours, admin-configurable)
   const vendorAcceptHoursSetting = await PlatformSetting.findOne({ key: 'vendorAcceptHours' });
@@ -144,7 +127,6 @@ const createBooking = asyncHandler(async (req, res) => {
       tax,
       totalAmount,
     },
-    escrow,
     vendorAcceptDeadline,
     paymentPlan: selectedPlan,
     depositAmount,
@@ -161,10 +143,7 @@ const createBooking = asyncHandler(async (req, res) => {
   res.status(201).json({
     success: true,
     message: 'Booking created successfully. Awaiting provider confirmation before payment.',
-    booking: {
-      ...booking.toObject(),
-      escrow: booking.escrow,
-    },
+    booking,
   });
 });
 
@@ -185,7 +164,7 @@ const checkoutCart = asyncHandler(async (req, res) => {
   const checkoutLinks = [];
 
   for (const payload of payloads) {
-    const { serviceId, venueId, eventId, eventDate, eventEndDate, eventTime, duration, numberOfGuests, specialRequirements, clientNotes, bookingLocation, escrow: escrowInput } = payload;
+    const { serviceId, venueId, eventId, eventDate, eventEndDate, eventTime, duration, numberOfGuests, specialRequirements, clientNotes, bookingLocation } = payload;
 
     if (!eventDate || (!serviceId && !venueId)) {
       continue;
@@ -237,11 +216,12 @@ const checkoutCart = asyncHandler(async (req, res) => {
       };
     }
 
-    const tax = pricing.subtotal ? pricing.subtotal * 0.075 : 0;
+    const feeSettingCheckout = await PlatformSetting.findOne({ key: 'serviceFeePercentage' });
+    const serviceFeeRateCheckout = feeSettingCheckout ? Number(feeSettingCheckout.value) / 100 : 0.10;
+    const tax = pricing.subtotal ? pricing.subtotal * serviceFeeRateCheckout : 0;
     const totalAmount = pricing.subtotal + tax;
 
     const bookingNumber = `EC-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-    const escrow = normalizeEscrowOptions(escrowInput);
 
     const booking = new Booking({
       bookingNumber,
@@ -264,7 +244,6 @@ const checkoutCart = asyncHandler(async (req, res) => {
         tax,
         totalAmount,
       },
-      escrow,
       status: BOOKING_STATUS.PENDING,
     });
 
@@ -280,7 +259,6 @@ const checkoutCart = asyncHandler(async (req, res) => {
     message: createdBookings.length > 0 ? 'Cart checked out successfully' : 'No bookings were created',
     bookings: createdBookings.map((booking) => ({
       ...booking.toObject(),
-      escrow: booking.escrow,
       checkoutUrl: (checkoutLinks.find((link) => String(link.bookingId) === String(booking._id)) || {}).checkoutUrl || null,
     })),
     checkouts: checkoutLinks,
@@ -424,6 +402,7 @@ const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
     booking.payment.paymentDate = new Date();
     booking.payment.method = booking.payment.method || 'paystack';
     await booking.save();
+    await _upsertPaymentRecord(booking, booking.payment.transactionId, booking.depositAmount, 'deposit');
 
     // Notify deposit paid
     try {
@@ -447,12 +426,8 @@ const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
     booking.balancePaid = true;
     booking.payment.status = PAYMENT_STATUS.COMPLETED;
     booking.payment.paymentDate = new Date();
-    booking.escrow.enabled = booking.escrow?.enabled ?? true;
-    booking.escrow.status = booking.escrow?.enabled ? 'active' : 'inactive';
-    booking.escrow.releaseStatus = 'held';
-    booking.escrow.holdAmount = booking.pricing?.totalAmount || 0;
-    booking.escrow.holdDate = new Date();
     await booking.save();
+    await _upsertPaymentRecord(booking, booking.payment.transactionId, booking.balanceDue, 'balance');
 
     try {
       const client = booking.client;
@@ -480,19 +455,15 @@ const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
   booking.payment.method = booking.payment.method || 'paystack';
   booking.depositPaid = true;
   booking.balancePaid = true;
-  booking.escrow.enabled = booking.escrow?.enabled ?? true;
-  booking.escrow.status = booking.escrow?.enabled ? 'active' : 'inactive';
-  booking.escrow.releaseStatus = 'held';
-  booking.escrow.holdAmount = booking.pricing?.totalAmount || 0;
-  booking.escrow.holdDate = new Date();
   await booking.save();
+  await _upsertPaymentRecord(booking, booking.payment.transactionId, booking.pricing?.totalAmount || 0, 'full');
 
   try {
     const client = booking.client;
     push.notifyPaymentConfirmation(client, booking);
   } catch (_) {}
 
-  res.status(200).json({ success: true, message: 'Booking payment secured in escrow', booking });
+  res.status(200).json({ success: true, message: 'Booking payment confirmed', booking });
 });
 
 /**
@@ -722,19 +693,7 @@ const cancelBooking = asyncHandler(async (req, res) => {
   booking.cancelledDate = new Date();
   booking.cancellationReason = reason;
 
-  // Handle escrow refund if payment was made and escrow is active
-  if (booking.payment.status === PAYMENT_STATUS.COMPLETED && booking.escrow?.enabled) {
-    const refundDecision = getEscrowRefundDecision({
-      amount: booking.pricing?.totalAmount || 0,
-      eventDate: booking.eventDate,
-      cancelledAt: new Date(),
-      enabled: true,
-    });
-
-    booking.payment.refundStatus = refundDecision.refundAmount > 0 ? 'pending' : 'none';
-    booking.payment.refundAmount = refundDecision.refundAmount;
-    booking.escrow.refundPolicy = refundDecision.reason;
-  } else if (booking.payment.status === PAYMENT_STATUS.COMPLETED) {
+  if (booking.payment.status === PAYMENT_STATUS.COMPLETED) {
     booking.payment.refundStatus = 'pending';
   }
 
@@ -782,11 +741,9 @@ const completeBooking = asyncHandler(async (req, res) => {
   booking.status = BOOKING_STATUS.COMPLETED;
   booking.completedDate = new Date();
 
-  if (booking.payment.status === PAYMENT_STATUS.COMPLETED && booking.escrow?.enabled) {
+  if (booking.payment.status === PAYMENT_STATUS.COMPLETED) {
     booking.payment.refundStatus = 'none';
     booking.payment.refundAmount = 0;
-    booking.escrow.releaseStatus = 'released';
-    booking.escrow.releaseDate = new Date();
   }
 
   await booking.save();
@@ -803,62 +760,6 @@ const completeBooking = asyncHandler(async (req, res) => {
     message: 'Booking marked as completed',
     booking,
   });
-});
-
-/**
- * Release escrow funds to the provider
- * PATCH /api/bookings/:id/release-escrow
- */
-const releaseEscrow = asyncHandler(async (req, res) => {
-  const booking = await Booking.findById(req.params.id);
-
-  if (!booking) {
-    return res.status(404).json({ success: false, message: 'Booking not found' });
-  }
-
-  if (booking.serviceProvider.toString() !== req.userId) {
-    return res.status(403).json({ success: false, message: 'Not authorized to release escrow' });
-  }
-
-  if (!booking.escrow?.enabled || booking.escrow?.releaseStatus === 'released') {
-    return res.status(400).json({ success: false, message: 'Escrow is not active for this booking' });
-  }
-
-  booking.escrow = releaseEscrowFunds({ escrow: booking.escrow, releasedAt: new Date() });
-  await booking.save();
-
-  res.status(200).json({ success: true, message: 'Escrow released to the provider', booking });
-});
-
-/**
- * Raise a dispute for escrow funds
- * PATCH /api/bookings/:id/dispute-escrow
- */
-const disputeEscrow = asyncHandler(async (req, res) => {
-  const booking = await Booking.findById(req.params.id);
-
-  if (!booking) {
-    return res.status(404).json({ success: false, message: 'Booking not found' });
-  }
-
-  if (
-    booking.client.toString() !== req.userId &&
-    booking.serviceProvider.toString() !== req.userId
-  ) {
-    return res.status(403).json({ success: false, message: 'Not authorized to dispute escrow' });
-  }
-
-  const { reason } = req.body;
-
-  booking.escrow = markEscrowDisputed({
-    escrow: booking.escrow,
-    initiatedBy: booking.client.toString() === req.userId ? 'client' : 'provider',
-    reason: reason || 'Escrow dispute raised',
-    disputedAt: new Date(),
-  });
-  await booking.save();
-
-  res.status(200).json({ success: true, message: 'Escrow dispute opened', booking });
 });
 
 /**
@@ -952,6 +853,50 @@ const handleFlutterwaveWebhook = async (req, res) => {
 };
 
 /**
+ * Upsert a Payment record so the admin can see all payments
+ */
+const _upsertPaymentRecord = async (booking, reference, paidAmount, paymentType) => {
+  try {
+    const client = booking.client?._id || booking.client;
+    const provider = booking.serviceProvider?._id || booking.serviceProvider;
+    const total = booking.pricing?.totalAmount || 0;
+    const feeSettingPayment = await PlatformSetting.findOne({ key: 'serviceFeePercentage' });
+    const commissionRate = feeSettingPayment ? Number(feeSettingPayment.value) / 100 : 0.10;
+    const platformFee = paidAmount * commissionRate;
+    const payeeAmount = paidAmount - platformFee;
+    const txnId = reference || `TXN-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+    await Payment.findOneAndUpdate(
+      { booking: booking._id, 'metadata.paymentType': paymentType },
+      {
+        transactionId: txnId,
+        payer: client,
+        payee: provider,
+        booking: booking._id,
+        amount: paidAmount,
+        currency: booking.pricing?.currency || 'NGN',
+        platformFee,
+        payeeAmount,
+        paymentMethod: booking.payment?.method || 'paystack',
+        paystackReference: booking.payment?.method !== 'flutterwave' ? txnId : undefined,
+        flutterwaveReference: booking.payment?.method === 'flutterwave' ? txnId : undefined,
+        status: PAYMENT_STATUS.COMPLETED,
+        description: `${paymentType} payment for booking ${booking.bookingNumber}`,
+        metadata: {
+          paymentType,
+          invoiceNumber: booking.bookingNumber,
+          eventName: booking.event?.name || '',
+          serviceName: booking.service?.name || '',
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+  } catch (err) {
+    console.error('Failed to upsert Payment record (non-fatal):', err.message);
+  }
+};
+
+/**
  * Shared logic for handling a successful payment from any gateway
  */
 const _handleSuccessfulPayment = async (booking, reference, amount) => {
@@ -963,6 +908,7 @@ const _handleSuccessfulPayment = async (booking, reference, amount) => {
     booking.payment.transactionId = reference || booking.payment.transactionId;
     booking.payment.paymentDate = new Date();
     await booking.save();
+    await _upsertPaymentRecord(booking, reference, booking.depositAmount || amount, 'deposit');
 
     try {
       const client = booking.client;
@@ -986,12 +932,8 @@ const _handleSuccessfulPayment = async (booking, reference, amount) => {
     booking.payment.status = PAYMENT_STATUS.COMPLETED;
     booking.payment.transactionId = reference || booking.payment.transactionId;
     booking.payment.paymentDate = new Date();
-    booking.escrow.enabled = booking.escrow?.enabled ?? true;
-    booking.escrow.status = 'active';
-    booking.escrow.releaseStatus = 'held';
-    booking.escrow.holdAmount = booking.pricing?.totalAmount || 0;
-    booking.escrow.holdDate = new Date();
     await booking.save();
+    await _upsertPaymentRecord(booking, reference, booking.balanceDue || amount, 'balance');
 
     try {
       const client = booking.client;
@@ -1006,12 +948,8 @@ const _handleSuccessfulPayment = async (booking, reference, amount) => {
   booking.payment.paymentDate = new Date();
   booking.depositPaid = true;
   booking.balancePaid = true;
-  booking.escrow.enabled = booking.escrow?.enabled ?? true;
-  booking.escrow.status = 'active';
-  booking.escrow.releaseStatus = 'held';
-  booking.escrow.holdAmount = amount || booking.pricing?.totalAmount || 0;
-  booking.escrow.holdDate = new Date();
   await booking.save();
+  await _upsertPaymentRecord(booking, reference, amount || booking.pricing?.totalAmount || 0, 'full');
 
   try {
     const client = booking.client;
@@ -1229,8 +1167,6 @@ module.exports = {
   completeBooking,
   createBookingPaymentSession,
   markBookingPaymentSuccess,
-  releaseEscrow,
-  disputeEscrow,
   handlePaystackWebhookRaw,
   handleFlutterwaveWebhook,
   checkAvailability,

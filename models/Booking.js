@@ -151,14 +151,8 @@ const bookingSchema = new mongoose.Schema(
       enum: Object.values(BOOKING_STATUS),
       default: BOOKING_STATUS.PENDING,
     },
-    // Vendor acceptance deadline and escrow status
+    // Vendor acceptance deadline
     vendorAcceptDeadline: Date,
-    autoReleaseAt: Date,
-    escrowStatus: {
-      type: String,
-      enum: ['none', 'held', 'disputed', 'released', 'refunded'],
-      default: 'none',
-    },
     strikes: {
       type: Number,
       default: 0,
@@ -189,40 +183,6 @@ const bookingSchema = new mongoose.Schema(
       refundAmount: Number,
     },
 
-    escrow: {
-      enabled: {
-        type: Boolean,
-        default: false,
-      },
-      releaseTime: {
-        type: String,
-        enum: ['immediate', 'after_customer_confirmation', '24_hours', '48_hours', 'custom'],
-        default: 'after_customer_confirmation',
-      },
-      releaseHours: {
-        type: Number,
-        default: 24,
-      },
-      disputePolicy: {
-        type: String,
-        enum: ['standard', 'mediation', 'marketplace'],
-        default: 'standard',
-      },
-      status: {
-        type: String,
-        enum: ['active', 'inactive'],
-        default: 'inactive',
-      },
-      releaseStatus: {
-        type: String,
-        enum: ['pending', 'held', 'released', 'disputed'],
-        default: 'pending',
-      },
-      holdAmount: Number,
-      holdDate: Date,
-      refundPolicy: String,
-    },
-
     // Timeline
     confirmedDate: Date,
     completedDate: Date,
@@ -243,6 +203,13 @@ const bookingSchema = new mongoose.Schema(
 
     // Admin decision
     adminNote: String, // acceptance message or rejection reason shown to client
+    adminSetPrices: [
+      {
+        serviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Service' },
+        serviceName: String,
+        price: Number,
+      },
+    ],
 
     // Metadata
     reminderSent: Boolean,

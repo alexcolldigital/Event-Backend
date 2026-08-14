@@ -38,6 +38,7 @@ const paymentSchema = new mongoose.Schema(
       invoiceNumber: String,
       eventName: String,
       serviceName: String,
+      paymentType: { type: String, enum: ['full', 'deposit', 'balance'], default: 'full' },
     },
   },
   { timestamps: true }

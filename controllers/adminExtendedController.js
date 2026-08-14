@@ -38,20 +38,20 @@ const logAudit = async (req, action, resource, resourceId, details, status = 'su
 // ─── COMMISSION MANAGEMENT ───────────────────────────────────────────────────
 
 const getCommissionSettings = asyncHandler(async (req, res) => {
-  const rows = await PlatformSetting.find({ key: { $in: ['commissionRate', 'minCommission', 'maxCommission', 'payoutSchedule'] } });
+  const rows = await PlatformSetting.find({ key: { $in: ['commissionRate', 'minCommission', 'maxCommission', 'payoutSchedule', 'serviceFeePercentage'] } });
   const commission = rows.reduce((acc, r) => { acc[r.key] = r.value; return acc; }, {});
   res.json({ success: true, commission });
 });
 
 const updateCommissionSettings = asyncHandler(async (req, res) => {
-  const { commissionRate, minCommission, maxCommission, payoutSchedule } = req.body;
-  const updates = { commissionRate, minCommission, maxCommission, payoutSchedule };
+  const { commissionRate, minCommission, maxCommission, payoutSchedule, serviceFeePercentage } = req.body;
+  const updates = { commissionRate, minCommission, maxCommission, payoutSchedule, serviceFeePercentage };
   for (const [key, value] of Object.entries(updates)) {
     if (value !== undefined) {
       await PlatformSetting.findOneAndUpdate({ key }, { key, value }, { upsert: true, new: true });
     }
   }
-  const rows = await PlatformSetting.find({ key: { $in: ['commissionRate', 'minCommission', 'maxCommission', 'payoutSchedule'] } });
+  const rows = await PlatformSetting.find({ key: { $in: ['commissionRate', 'minCommission', 'maxCommission', 'payoutSchedule', 'serviceFeePercentage'] } });
   const commission = rows.reduce((acc, r) => { acc[r.key] = r.value; return acc; }, {});
   await logAudit(req, 'UPDATE_COMMISSION', 'PlatformSetting', null, req.body);
   res.json({ success: true, message: 'Commission settings updated', commission });
