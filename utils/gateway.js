@@ -1,15 +1,18 @@
 const fetch = global.fetch || require('node-fetch');
 
-const initializeCheckout = async ({ booking, origin } = {}) => {
-  const amount = Math.round((booking.pricing?.totalAmount || 0) * 100); // kobos
-  const email = booking.client?.email || booking.client; // may be id
+const initializeCheckout = async ({ booking, origin, amountOverride, preferredGateway, paymentType } = {}) => {
+  const amount = Math.round((amountOverride !== undefined ? amountOverride : (booking.pricing?.totalAmount || 0)) * 100); // kobos
+  const rawAmount = amountOverride !== undefined ? amountOverride : (booking.pricing?.totalAmount || 0);
+  const email = booking.client?.email || booking.client;
   const metadata = {
     bookingId: booking._id ? booking._id.toString() : null,
     bookingNumber: booking.bookingNumber,
+    paymentType: paymentType || 'full',
   };
+  const callbackBase = `${origin}/payment-callback?bookingId=${metadata.bookingId}&paymentType=${metadata.paymentType}`;
 
-  // Try Paystack first
-  if (process.env.PAYSTACK_SECRET) {
+  // Try Paystack first (unless Flutterwave explicitly preferred)
+  if (process.env.PAYSTACK_SECRET && preferredGateway !== 'flutterwave') {
     try {
       const res = await fetch('https://api.paystack.co/transaction/initialize', {
         method: 'POST',
@@ -21,7 +24,7 @@ const initializeCheckout = async ({ booking, origin } = {}) => {
           email: email || 'no-reply@eventcompass.com',
           amount,
           metadata,
-          callback_url: `${origin}/payment-callback?bookingId=${metadata.bookingId}`,
+          callback_url: callbackBase,
         }),
       });
 
@@ -34,7 +37,7 @@ const initializeCheckout = async ({ booking, origin } = {}) => {
     }
   }
 
-  // Fallback to Flutterwave
+  // Fallback to Flutterwave (or use it when explicitly preferred)
   if (process.env.FLUTTERWAVE_SECRET) {
     try {
       const res = await fetch('https://api.flutterwave.com/v3/payments', {
@@ -45,9 +48,9 @@ const initializeCheckout = async ({ booking, origin } = {}) => {
         },
         body: JSON.stringify({
           tx_ref: `EC-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          amount: (booking.pricing?.totalAmount || 0).toString(),
+          amount: rawAmount.toString(),
           currency: booking.pricing?.currency || 'NGN',
-          redirect_url: `${origin}/payment-callback?bookingId=${metadata.bookingId}`,
+          redirect_url: callbackBase,
           customer: {
             email: email || 'no-reply@eventcompass.com',
             phonenumber: booking.client?.phoneNumber || undefined,

@@ -3,8 +3,9 @@ const PlatformSetting = require('../models/PlatformSetting');
 const gateway = require('./gateway');
 const Payout = require('../models/Payout');
 const User = require('../models/User');
-const { BOOKING_STATUS, PAYMENT_STATUS } = require('../config/constants');
+const { BOOKING_STATUS, PAYMENT_STATUS, PAYMENT_PLAN } = require('../config/constants');
 const push = require('./pushNotification');
+const { sendBalanceDueReminderEmail } = require('./email');
 
 const processExpiredAcceptances = async () => {
   try {
@@ -139,15 +140,55 @@ const processBookingReminders = async () => {
   }
 };
 
+const processBalanceDueReminders = async () => {
+  try {
+    const now = new Date();
+    // Find deposit-plan bookings where balance is unpaid and event is within 7 days
+    const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const bookings = await Booking.find({
+      status: BOOKING_STATUS.CONFIRMED,
+      paymentPlan: { $in: [PAYMENT_PLAN.SPLIT_50_50, PAYMENT_PLAN.DEPOSIT_20] },
+      depositPaid: true,
+      balancePaid: { $ne: true },
+      eventDate: { $gte: now, $lte: sevenDaysFromNow },
+      reminderScheduled: { $ne: true },
+    });
+
+    for (const booking of bookings) {
+      try {
+        const client = await User.findById(booking.client);
+        const daysLeft = Math.ceil((new Date(booking.eventDate) - now) / (1000 * 60 * 60 * 24));
+        push.notifyBalanceDueReminder(client, booking, daysLeft);
+        if (client?.email) {
+          await sendBalanceDueReminderEmail(client.email, {
+            bookingNumber: booking.bookingNumber,
+            balanceDue: booking.balanceDue,
+            eventDate: booking.eventDate,
+            daysLeft,
+          });
+        }
+        booking.reminderScheduled = true;
+        await booking.save();
+      } catch (err) {
+        console.error('Balance due reminder failed for booking', booking._id, err.message);
+      }
+    }
+  } catch (err) {
+    console.error('processBalanceDueReminders error', err);
+  }
+};
+
 const startSchedulers = (intervalMinutes = 15) => {
   processExpiredAcceptances();
   processAutoReleases();
   processBookingReminders();
+  processBalanceDueReminders();
 
   setInterval(() => {
     processExpiredAcceptances();
     processAutoReleases();
     processBookingReminders();
+    processBalanceDueReminders();
   }, intervalMinutes * 60 * 1000);
 };
 
@@ -155,5 +196,6 @@ module.exports = {
   processExpiredAcceptances,
   processAutoReleases,
   processBookingReminders,
+  processBalanceDueReminders,
   startSchedulers,
 };

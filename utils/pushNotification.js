@@ -113,6 +113,26 @@ const notifyCancellation = (user, booking) => {
   );
 };
 
+const notifyDepositPaid = (user, booking) => {
+  if (!isPrefEnabled(user, 'paymentConfirmation')) return;
+  return sendPush(
+    user.fcmToken,
+    'Deposit Received',
+    `Your deposit for booking #${booking.bookingNumber} is confirmed. Balance due: \u20A6${Number(booking.balanceDue).toLocaleString()}.`,
+    { type: 'deposit_paid', bookingId: String(booking._id) }
+  );
+};
+
+const notifyBalanceDueReminder = (user, booking, daysLeft) => {
+  if (!isPrefEnabled(user, 'bookingReminder')) return;
+  return sendPush(
+    user.fcmToken,
+    'Balance Payment Reminder',
+    `Your event is in ${daysLeft} day(s). Please pay the remaining \u20A6${Number(booking.balanceDue).toLocaleString()} for booking #${booking.bookingNumber}.`,
+    { type: 'balance_due_reminder', bookingId: String(booking._id) }
+  );
+};
+
 const notifyPromotion = (user, title, message) => {
   if (!isPrefEnabled(user, 'promotional')) return;
   return sendPush(user.fcmToken, title, message, { type: 'promotional' });
@@ -136,4 +156,6 @@ module.exports = {
   notifyCancellation,
   notifyPromotion,
   notifyNewMessage,
+  notifyDepositPaid,
+  notifyBalanceDueReminder,
 };

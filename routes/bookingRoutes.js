@@ -8,6 +8,12 @@ const router = express.Router();
 const bookingController = require('../controllers/bookingController');
 const { authenticate } = require('../middleware/auth');
 
+// Paystack webhook (raw body)
+router.post('/webhook/paystack', bookingController.handlePaystackWebhookRaw);
+
+// Flutterwave webhook
+router.post('/webhook/flutterwave', bookingController.handleFlutterwaveWebhook);
+
 // Check availability (public)
 router.get('/availability', bookingController.checkAvailability);
 
@@ -40,6 +46,9 @@ router.patch('/:id/dispute-escrow', authenticate, bookingController.disputeEscro
 
 // Confirm booking (private - provider only)
 router.patch('/:id/confirm', authenticate, bookingController.confirmBooking);
+
+// Reject booking (private - provider only)
+router.patch('/:id/reject', authenticate, bookingController.rejectBooking);
 
 // Cancel booking (private)
 router.patch('/:id/cancel', authenticate, bookingController.cancelBooking);

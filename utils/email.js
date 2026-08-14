@@ -231,6 +231,64 @@ const sendApprovalEmail = async (email, providerName) => {
   }
 };
 
+/**
+ * Send deposit paid email
+ */
+const sendDepositPaidEmail = async (email, details) => {
+  if (!isEmailConfigured()) return;
+  const { bookingNumber, depositAmount, balanceDue, eventDate, paymentPlan } = details;
+  const planLabel = paymentPlan === 'deposit_20' ? '20%' : '50%';
+  const mailOptions = {
+    from: process.env.FROM_EMAIL,
+    to: email,
+    subject: `Deposit Received - Booking #${bookingNumber}`,
+    html: `
+      <h2>Deposit Payment Confirmed!</h2>
+      <p>Your ${planLabel} deposit for booking <strong>#${bookingNumber}</strong> has been received.</p>
+      <ul>
+        <li><strong>Deposit Paid:</strong> &#8358;${Number(depositAmount).toLocaleString()}</li>
+        <li><strong>Balance Due:</strong> &#8358;${Number(balanceDue).toLocaleString()}</li>
+        <li><strong>Event Date:</strong> ${new Date(eventDate).toDateString()}</li>
+      </ul>
+      <p style="color:#dc2626;"><strong>Important:</strong> You must complete the remaining balance before your event date to avoid cancellation.</p>
+      <p>Thank you for using Event Compass!</p>
+    `,
+  };
+  try {
+    await transporter.sendMail(mailOptions);
+  } catch (error) {
+    console.error('Error sending deposit paid email:', error);
+  }
+};
+
+/**
+ * Send balance due reminder email
+ */
+const sendBalanceDueReminderEmail = async (email, details) => {
+  if (!isEmailConfigured()) return;
+  const { bookingNumber, balanceDue, eventDate, daysLeft } = details;
+  const mailOptions = {
+    from: process.env.FROM_EMAIL,
+    to: email,
+    subject: `Balance Payment Reminder - Booking #${bookingNumber}`,
+    html: `
+      <h2>Balance Payment Reminder</h2>
+      <p>Your event is in <strong>${daysLeft} day(s)</strong> and you still have an outstanding balance.</p>
+      <ul>
+        <li><strong>Booking:</strong> #${bookingNumber}</li>
+        <li><strong>Balance Due:</strong> &#8358;${Number(balanceDue).toLocaleString()}</li>
+        <li><strong>Event Date:</strong> ${new Date(eventDate).toDateString()}</li>
+      </ul>
+      <p style="color:#dc2626;"><strong>Please complete your payment before the event date to avoid cancellation.</strong></p>
+    `,
+  };
+  try {
+    await transporter.sendMail(mailOptions);
+  } catch (error) {
+    console.error('Error sending balance reminder email:', error);
+  }
+};
+
 module.exports = {
   sendWelcomeEmail,
   sendBookingConfirmationEmail,
@@ -239,4 +297,6 @@ module.exports = {
   sendApprovalEmail,
   sendEmailVerificationEmail,
   sendTwoFactorEmail,
+  sendDepositPaidEmail,
+  sendBalanceDueReminderEmail,
 };
