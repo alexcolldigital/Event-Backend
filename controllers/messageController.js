@@ -239,6 +239,33 @@ const deleteMessage = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, message: 'Message deleted' });
 });
 
+const clearConversation = asyncHandler(async (req, res) => {
+  const { conversationId } = req.params;
+  if (!conversationId) {
+    return res.status(400).json({ success: false, message: 'conversationId is required' });
+  }
+
+  const [userA, userB] = conversationId.split('_');
+  const userIds = [userA, userB].filter(Boolean);
+  if (req.user.role !== 'admin' && !userIds.includes(String(req.userId))) {
+    return res.status(403).json({ success: false, message: 'Not authorized to clear this conversation' });
+  }
+
+  const result = await Message.updateMany(
+    { conversationId, isDeleted: false },
+    { $set: { isDeleted: true, content: 'This message was deleted' } }
+  );
+
+  const io = req.app.get('io');
+  if (io) io.to(conversationId).emit('conversation_cleared', { conversationId, deletedCount: result.modifiedCount || result.nModified || result.matchedCount || 0 });
+
+  res.status(200).json({
+    success: true,
+    message: 'Conversation cleared',
+    deletedCount: result.modifiedCount || result.nModified || result.matchedCount || 0,
+  });
+});
+
 module.exports = {
   sendMessage,
   getConversations,
@@ -246,4 +273,5 @@ module.exports = {
   getBookingMessages,
   markRead,
   deleteMessage,
+  clearConversation,
 };

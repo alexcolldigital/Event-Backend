@@ -42,6 +42,9 @@ router.get('/booking/:bookingId', authenticate, messageController.getBookingMess
 // Mark conversation as read
 router.patch('/conversation/:conversationId/read', authenticate, messageController.markRead);
 
+// Clear an entire chat conversation after provider/admin confirms no further questions
+router.delete('/conversation/:conversationId', authenticate, messageController.clearConversation);
+
 // Delete a message
 router.delete('/:id', authenticate, messageController.deleteMessage);
 
