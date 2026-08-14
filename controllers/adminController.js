@@ -707,6 +707,23 @@ const uploadServiceMedia = asyncHandler(async (req, res) => {
 });
 
 /**
+ * Get single booking with full details (admin)
+ * GET /api/admin/bookings/:id
+ */
+const getBookingById = asyncHandler(async (req, res) => {
+  const booking = await Booking.findById(req.params.id)
+    .populate('client', 'firstName lastName email phoneNumber profileImage')
+    .populate('serviceProvider', 'firstName lastName businessName email phoneNumber profileImage')
+    .populate('service', 'name serviceType pricing packages images description')
+    .populate('venue', 'name rentalPrice location images description')
+    .populate('event', 'name eventDate');
+
+  if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+  res.status(200).json({ success: true, booking });
+});
+
+/**
  * Admin confirm booking
  * PATCH /api/admin/bookings/:id/confirm
  */
@@ -781,7 +798,7 @@ const assignRole = asyncHandler(async (req, res) => {
   const user = await User.findById(req.params.id);
   if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
-  if (user._id.toString() === req.userId) {
+  if (user._id.toString() === req.user._id.toString()) {
     return res.status(400).json({ success: false, message: 'Cannot change your own role' });
   }
 
@@ -806,6 +823,7 @@ module.exports = {
   getUserAnalytics,
   createAnalyticsRecord,
   getSystemReports,
+  getBookingById,
   getAllServices,
   getServiceById,
   createService,
