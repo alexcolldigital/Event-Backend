@@ -329,7 +329,7 @@ const checkoutCart = asyncHandler(async (req, res) => {
 const getBookingById = asyncHandler(async (req, res) => {
   const booking = await Booking.findById(req.params.id)
     .populate('client', 'firstName lastName email phoneNumber')
-    .populate('serviceProvider', 'firstName lastName businessName')
+    .populate('serviceProvider', 'firstName lastName email phoneNumber businessName role')
     .populate('service')
     .populate('venue');
 
