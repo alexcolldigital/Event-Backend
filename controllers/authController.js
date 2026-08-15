@@ -14,6 +14,7 @@ const {
   sendTwoFactorEmail,
   sendEmailVerificationEmail,
   sendVerificationCodeEmail,
+  sendPasswordResetCodeEmail,
 } = require('../utils/email');
 const { USER_ROLES } = require('../config/constants');
 const { sendPhoneOtpSms } = require('../utils/sms');
@@ -59,6 +60,21 @@ const sendVerificationEmailToUser = async (user) => {
   return sendOtpToUser(user);
 };
 
+// Generate & send a 6-digit OTP for password reset without touching email verification codes
+const sendPasswordResetOtpToUser = async (user) => {
+  if (!user || !user.email) return null;
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  user.passwordResetToken = crypto.createHash('sha256').update(otp).digest('hex');
+  user.passwordResetExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
+  await user.save();
+  try {
+    await sendPasswordResetCodeEmail(user.email, user.firstName, otp);
+  } catch (emailErr) {
+    console.error('Password reset OTP email failed (non-fatal):', emailErr.message || emailErr);
+  }
+  return otp;
+};
+
 const formatUser = (user) => ({
   id: user._id,
   _id: user._id,
@@ -101,7 +117,6 @@ const registerUser = asyncHandler(async (req, res) => {
     password,
     passwordConfirm,
     role,
-    verificationMethod,
   } = req.body;
 
   if (!firstName || !lastName || !email || !phoneNumber || !password) {
@@ -130,44 +145,23 @@ const registerUser = asyncHandler(async (req, res) => {
     role: role || USER_ROLES.CLIENT,
   });
 
-  const method = verificationMethod === 'phone' ? 'phone' : 'email';
+  const verificationToken = user.getEmailVerificationToken();
   await user.save();
 
-  let response = {
+  sendEmailVerificationEmail(
+    email,
+    firstName,
+    `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`
+  ).catch((emailErr) => {
+    console.error('Verification email failed (non-fatal):', emailErr.message);
+  });
+
+  res.status(201).json({
     success: true,
-    user: formatUser(user),
     message: 'User registered successfully. Please verify your email before logging in.',
     requiresEmailVerification: true,
-    verificationMethod: 'email',
-  };
-
-  if (method === 'phone') {
-    let otp = null;
-    try {
-      otp = await user.generatePhoneOtp();
-      await sendPhoneOtpSms(user.phoneNumber, otp);
-    } catch (phoneErr) {
-      console.error('Phone OTP send failed during registration:', phoneErr.message || phoneErr);
-    }
-
-    response = {
-      success: true,
-      user: formatUser(user),
-      token: generateToken(user._id, user.role),
-      refreshToken: generateRefreshToken(user._id),
-      message: 'Account created. Please verify your phone number to continue.',
-      requiresPhoneVerification: true,
-      verificationMethod: 'phone',
-    };
-
-    if (otp && process.env.NODE_ENV === 'development') {
-      response.otp = otp;
-    }
-  } else {
-    sendOtpToUser(user).catch(() => {});
-  }
-
-  res.status(201).json(response);
+    user: formatUser(user),
+  });
 });
 
 /**
@@ -189,7 +183,6 @@ const registerServiceProvider = asyncHandler(async (req, res) => {
     country,
     countryCode,
     dialCode,
-    verificationMethod,
   } = req.body;
 
   // Validate input
@@ -234,42 +227,18 @@ const registerServiceProvider = asyncHandler(async (req, res) => {
     address,
   });
 
-  const method = verificationMethod === 'phone' ? 'phone' : 'email';
+  const verificationToken = user.getEmailVerificationToken();
   await user.save();
-
-  if (method === 'phone') {
-    let otp = null;
-    try {
-      otp = await user.generatePhoneOtp();
-      await sendPhoneOtpSms(user.phoneNumber, otp);
-    } catch (phoneErr) {
-      console.error('Phone OTP send failed during provider registration:', phoneErr.message || phoneErr);
-    }
-
-    const payload = {
-      success: true,
-      message: 'Service provider registered successfully. Please verify your phone number to continue.',
-      requiresPhoneVerification: true,
-      verificationMethod: 'phone',
-      token: generateToken(user._id, user.role),
-      refreshToken: generateRefreshToken(user._id),
-      user: formatUser(user),
-    };
-
-    if (otp && process.env.NODE_ENV === 'development') {
-      payload.otp = otp;
-    }
-
-    return res.status(201).json(payload);
-  }
-
-  sendOtpToUser(user).catch(() => {});
+  sendEmailVerificationEmail(
+    email,
+    firstName,
+    `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`
+  ).catch(() => {});
 
   res.status(201).json({
     success: true,
     message: 'Service provider registered successfully. Please verify your email before logging in.',
     requiresEmailVerification: true,
-    verificationMethod: 'email',
     user: formatUser(user),
   });
 });
@@ -355,24 +324,6 @@ const performLogin = async (user, req, res) => {
   const token = generateToken(user._id, user.role);
   const refreshToken = generateRefreshToken(user._id);
 
-  // Phone not verified — issue token but prompt verification
-  if (!user.isPhoneVerified) {
-    try {
-      const otp = await user.generatePhoneOtp();
-      await sendPhoneOtpSms(user.phoneNumber, otp).catch(() => {});
-    } catch (e) { /* non-fatal */ }
-
-    return res.status(200).json({
-      success: true,
-      message: 'Login successful. Please verify your phone number.',
-      token,
-      refreshToken,
-      user: formatUser(user),
-      suspicious,
-      requiresPhoneVerification: true,
-    });
-  }
-
   return res.status(200).json({
     success: true,
     message: 'Login successful',
@@ -428,15 +379,6 @@ const loginWithPhone = asyncHandler(async (req, res) => {
     return res.status(401).json({ success: false, message: 'Invalid credentials' });
   }
 
-  if (!user.isPhoneVerified) {
-    return res.status(403).json({
-      success: false,
-      message: 'Phone number not verified. Please verify your phone number from your profile before logging in with it.',
-      requiresPhoneVerification: true,
-      userId: user._id,
-    });
-  }
-
   return performLogin(user, req, res);
 });
 
@@ -465,16 +407,6 @@ const loginUnified = asyncHandler(async (req, res) => {
     const { ip, userAgent, deviceId } = getRequestMeta(req);
     await user.addLoginHistory({ ip, userAgent, deviceId, success: false });
     return res.status(401).json({ success: false, message: 'Invalid credentials' });
-  }
-
-  // Phone login requires verified phone number
-  if (!isEmail && !user.isPhoneVerified) {
-    return res.status(403).json({
-      success: false,
-      message: 'Phone number not verified. Please verify your phone number from your profile before logging in with it.',
-      requiresPhoneVerification: true,
-      userId: user._id,
-    });
   }
 
   return performLogin(user, req, res);
@@ -679,16 +611,16 @@ const verifyOtp = asyncHandler(async (req, res) => {
   const hashedOtp = crypto.createHash('sha256').update(otp).digest('hex');
   const user = await User.findOne({
     email,
-    emailVerificationToken: hashedOtp,
-    emailVerificationExpires: { $gt: Date.now() },
+    passwordResetToken: hashedOtp,
+    passwordResetExpires: { $gt: Date.now() },
   });
 
   if (!user) return res.status(400).json({ success: false, message: 'Invalid or expired code' });
 
   // Issue a short-lived reset token so the next step can reset the password
   const resetToken = crypto.randomBytes(32).toString('hex');
-  user.emailVerificationToken = crypto.createHash('sha256').update(resetToken).digest('hex');
-  user.emailVerificationExpires = Date.now() + 15 * 60 * 1000; // 15 min
+  user.passwordResetToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+  user.passwordResetExpires = Date.now() + 15 * 60 * 1000; // 15 min
   await user.save();
 
   res.status(200).json({ success: true, message: 'Code verified', resetToken });
@@ -711,15 +643,15 @@ const resetPassword = asyncHandler(async (req, res) => {
 
   const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
   const user = await User.findOne({
-    emailVerificationToken: hashedToken,
-    emailVerificationExpires: { $gt: Date.now() },
+    passwordResetToken: hashedToken,
+    passwordResetExpires: { $gt: Date.now() },
   });
 
   if (!user) return res.status(400).json({ success: false, message: 'Invalid or expired token' });
 
   user.password = newPassword;
-  user.emailVerificationToken = undefined;
-  user.emailVerificationExpires = undefined;
+  user.passwordResetToken = undefined;
+  user.passwordResetExpires = undefined;
   await user.save();
 
   res.status(200).json({ success: true, message: 'Password reset successfully' });
@@ -746,6 +678,7 @@ const verifyEmail = asyncHandler(async (req, res) => {
   if (!user) return res.status(400).json({ success: false, message: 'Invalid or expired code' });
 
   user.isEmailVerified = true;
+  user.isPhoneVerified = true; // Auto-verify phone when email is verified
   user.isVerified = user.isEmailVerified || user.isPhoneVerified || user.isBusinessVerified;
   user.emailVerificationToken = undefined;
   user.emailVerificationExpires = undefined;

@@ -77,15 +77,15 @@ describe('email verification gate', () => {
     expect(loginAfterVerify.body.token).toBeDefined();
   });
 
-  it('supports phone-based verification immediately after registration', async () => {
-    const email = `phone_verify_${Date.now()}_${Math.random().toString(36).slice(2)}@example.com`;
+  it('defaults registration to email verification and does not require SMS verification', async () => {
+    const email = `email_only_${Date.now()}_${Math.random().toString(36).slice(2)}@example.com`;
     const password = 'Password123!';
 
     const registerRes = await request(app)
       .post('/api/auth/register')
       .send({
-        firstName: 'Phone',
-        lastName: 'Verify',
+        firstName: 'Email',
+        lastName: 'Only',
         email,
         phoneNumber: `+234${String(Date.now()).slice(-9)}`,
         country: 'Nigeria',
@@ -93,13 +93,12 @@ describe('email verification gate', () => {
         dialCode: '+234',
         password,
         passwordConfirm: password,
-        verificationMethod: 'phone',
       })
       .expect(201);
 
     expect(registerRes.body.success).toBe(true);
-    expect(registerRes.body.token).toBeDefined();
-    expect(registerRes.body.requiresPhoneVerification).toBe(true);
-    expect(registerRes.body.verificationMethod).toBe('phone');
+    expect(registerRes.body.token).toBeUndefined();
+    expect(registerRes.body.requiresEmailVerification).toBe(true);
+    expect(registerRes.body.requiresPhoneVerification).toBeUndefined();
   });
 });

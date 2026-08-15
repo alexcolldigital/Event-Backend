@@ -164,6 +164,23 @@ const sendPasswordResetEmail = async (email, resetUrl) => {
   } catch (e) { console.error('Password reset email error:', e.message); }
 };
 
+const sendPasswordResetCodeEmail = async (email, firstName, code) => {
+  try {
+    await sendMail({
+      to: email,
+      subject: `Your Event Compass Password Reset Code: ${code}`,
+      html: layout('Reset Password', `
+        <p>Hi <strong>${firstName}</strong>,</p>
+        <p>Use the code below to reset your password:</p>
+        <div style="text-align:center;margin:28px 0">
+          <span style="display:inline-block;background:#f0fdf4;border:2px dashed #16a34a;border-radius:12px;padding:18px 40px;font-size:38px;font-weight:800;letter-spacing:12px;color:#16a34a">${code}</span>
+        </div>
+        <div class="alert aw">This code expires in <strong>10 minutes</strong>. Do not share it with anyone.</div>
+        <p>If you did not request this, please ignore this email.</p>`),
+    });
+  } catch (e) { console.error('Password reset code email error:', e.message); }
+};
+
 const sendApprovalEmail = async (email, providerName) => {
   try {
     await sendMail({
@@ -403,6 +420,7 @@ module.exports = {
   sendTwoFactorEmail,
   sendEmailVerificationEmail,
   sendPasswordResetEmail,
+  sendPasswordResetCodeEmail,
   sendApprovalEmail,
   sendBookingConfirmationEmail,
   sendPaymentReceiptEmail,
