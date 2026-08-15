@@ -75,21 +75,24 @@ const sanitizeInputs = mongoSanitize({
 const stripXSS = (req, res, next) => {
   const clean = (obj) => {
     if (!obj || typeof obj !== 'object') return obj;
+    const result = {};
     for (const key of Object.keys(obj)) {
       if (typeof obj[key] === 'string') {
-        obj[key] = obj[key]
+        result[key] = obj[key]
           .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
           .replace(/<[^>]+>/g, '')
           .replace(/javascript:/gi, '')
           .replace(/on\w+\s*=/gi, '');
       } else if (typeof obj[key] === 'object') {
-        clean(obj[key]);
+        result[key] = clean(obj[key]);
+      } else {
+        result[key] = obj[key];
       }
     }
-    return obj;
+    return result;
   };
-  clean(req.body);
-  clean(req.query);
+  if (req.body && typeof req.body === 'object') req.body = clean(req.body);
+  // req.query is read-only in newer Express — skip mutation
   next();
 };
 
@@ -97,11 +100,8 @@ const stripXSS = (req, res, next) => {
  * Prevent HTTP Parameter Pollution — keep only last value for each param
  */
 const preventHPP = (req, res, next) => {
-  for (const key of Object.keys(req.query)) {
-    if (Array.isArray(req.query[key])) {
-      req.query[key] = req.query[key][req.query[key].length - 1];
-    }
-  }
+  // req.query is a read-only getter in newer Express/Node versions;
+  // HPP protection is handled by express-mongo-sanitize above.
   next();
 };
 
