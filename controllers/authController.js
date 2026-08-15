@@ -727,9 +727,17 @@ const verifyEmail = asyncHandler(async (req, res) => {
 /**
  * Resend email verification
  * POST /api/auth/resend-verification
+ * Works authenticated (req.userId) or unauthenticated (body.email or body.userId)
  */
 const resendVerification = asyncHandler(async (req, res) => {
-  const user = await User.findById(req.userId);
+  let user;
+  if (req.userId) {
+    user = await User.findById(req.userId);
+  } else if (req.body.email) {
+    user = await User.findOne({ email: req.body.email });
+  } else if (req.body.userId) {
+    user = await User.findById(req.body.userId);
+  }
   if (!user) return res.status(404).json({ success: false, message: 'User not found' });
   if (user.isEmailVerified) return res.status(400).json({ success: false, message: 'Email already verified' });
 

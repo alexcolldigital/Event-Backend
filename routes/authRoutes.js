@@ -77,7 +77,25 @@ router.post(
   authController.verifyEmail
 );
 
-router.post('/resend-verification', authenticate, authController.resendVerification);
+// resend-verification: works with or without auth token
+// unauthenticated users pass { email } or { userId } in body
+router.post(
+  '/resend-verification',
+  otpLimiter,
+  async (req, res, next) => {
+    // Optionally attach userId if a valid token is present — non-blocking
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const { verifyToken } = require('../config/jwt');
+        const decoded = verifyToken(authHeader.split(' ')[1]);
+        req.userId = String(decoded.id);
+      } catch (_) { /* token invalid — proceed without userId */ }
+    }
+    next();
+  },
+  authController.resendVerification
+);
 
 // 2FA
 router.post(
