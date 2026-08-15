@@ -317,7 +317,7 @@ userSchema.methods.comparePassword = async function (enteredPassword) {
 userSchema.methods.getEmailVerificationToken = function () {
   const rawToken = crypto.randomBytes(32).toString('hex');
   this.emailVerificationToken = crypto.createHash('sha256').update(rawToken).digest('hex');
-  this.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000;
+  this.emailVerificationExpires = Date.now() + 7 * 24 * 60 * 60 * 1000; // 7 days
   return rawToken;
 };
 

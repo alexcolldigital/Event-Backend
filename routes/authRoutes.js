@@ -69,11 +69,18 @@ router.post(
   authController.loginUnified
 );
 
-// Email verification
+router.post(
+  '/verify-otp',
+  authLimiter,
+  [body('email').isEmail(), body('otp').isLength({ min: 6, max: 6 })],
+  validateRequest,
+  authController.verifyOtp
+);
+
+// Email verification (OTP)
 router.post(
   '/verify-email',
-  [body('token').notEmpty().withMessage('Token is required')],
-  validateRequest,
+  [body('otp').optional().isLength({ min: 6, max: 6 }), body('token').optional().notEmpty()],
   authController.verifyEmail
 );
 
@@ -179,6 +186,9 @@ router.post(
   validateRequest,
   authController.resetPassword
 );
+
+// Send OTP before change-password
+router.post('/send-change-password-otp', authenticate, otpLimiter, authController.sendChangePasswordOtp);
 
 // Get admin contacts (for messaging support)
 router.get('/admin-contacts', authenticate, authController.getAdminContacts);

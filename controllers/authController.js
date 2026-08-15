@@ -40,20 +40,23 @@ const isNewDeviceLogin = (user, deviceId) => {
   return !trustedDevices.some((d) => d.deviceId === deviceId);
 };
 
-const sendVerificationEmailToUser = async (user) => {
+// Generate & send a 6-digit OTP to the user's email
+const sendOtpToUser = async (user) => {
   if (!user || !user.email) return null;
-  const verificationToken = user.getEmailVerificationToken();
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  user.emailVerificationToken = crypto.createHash('sha256').update(otp).digest('hex');
+  user.emailVerificationExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
   await user.save();
   try {
-    await sendEmailVerificationEmail(
-      user.email,
-      user.firstName,
-      `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`
-    );
+    await sendVerificationCodeEmail(user.email, user.firstName, otp);
   } catch (emailErr) {
-    console.error('Verification email failed (non-fatal):', emailErr.message || emailErr);
+    console.error('OTP email failed (non-fatal):', emailErr.message || emailErr);
   }
-  return verificationToken;
+  return otp;
+};
+
+const sendVerificationEmailToUser = async (user) => {
+  return sendOtpToUser(user);
 };
 
 const formatUser = (user) => ({
@@ -128,7 +131,6 @@ const registerUser = asyncHandler(async (req, res) => {
   });
 
   const method = verificationMethod === 'phone' ? 'phone' : 'email';
-  const verificationToken = user.getEmailVerificationToken();
   await user.save();
 
   let response = {
@@ -162,13 +164,7 @@ const registerUser = asyncHandler(async (req, res) => {
       response.otp = otp;
     }
   } else {
-    sendEmailVerificationEmail(
-      email,
-      firstName,
-      `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`
-    ).catch((emailErr) => {
-      console.error('Verification email failed (non-fatal):', emailErr.message);
-    });
+    sendOtpToUser(user).catch(() => {});
   }
 
   res.status(201).json(response);
@@ -239,7 +235,6 @@ const registerServiceProvider = asyncHandler(async (req, res) => {
   });
 
   const method = verificationMethod === 'phone' ? 'phone' : 'email';
-  const verificationToken = user.getEmailVerificationToken();
   await user.save();
 
   if (method === 'phone') {
@@ -268,11 +263,7 @@ const registerServiceProvider = asyncHandler(async (req, res) => {
     return res.status(201).json(payload);
   }
 
-  sendEmailVerificationEmail(
-    email,
-    firstName,
-    `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`
-  ).catch(() => {});
+  sendOtpToUser(user).catch(() => {});
 
   res.status(201).json({
     success: true,
@@ -304,7 +295,7 @@ const performLogin = async (user, req, res) => {
   }
 
   if (!user.isEmailVerified) {
-    await sendVerificationEmailToUser(user);
+    await sendOtpToUser(user);
     return res.status(403).json({
       success: false,
       message: 'Please verify your email before logging in.',
@@ -314,7 +305,7 @@ const performLogin = async (user, req, res) => {
   }
 
   if (isNewDeviceLogin(user, deviceId)) {
-    await sendVerificationEmailToUser(user);
+    await sendOtpToUser(user);
     return res.status(403).json({
       success: false,
       message: 'New device detected. A verification email has been sent to your inbox to confirm this device.',
@@ -571,6 +562,17 @@ const updateProfile = asyncHandler(async (req, res) => {
 });
 
 /**
+ * Send OTP before changing password
+ * POST /api/auth/send-change-password-otp
+ */
+const sendChangePasswordOtp = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.userId);
+  if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+  await sendOtpToUser(user);
+  res.status(200).json({ success: true, message: 'A 6-digit code has been sent to your email' });
+});
+
+/**
  * Change password
  * POST /api/auth/change-password
  */
@@ -641,118 +643,71 @@ const changePassword = asyncHandler(async (req, res) => {
 });
 
 /**
- * Request password reset
+ * Request password reset — sends 6-digit OTP to email
  * POST /api/auth/forgot-password
  */
 const forgotPassword = asyncHandler(async (req, res) => {
   const { identifier } = req.body;
 
-  if (!identifier) {
-    return res.status(400).json({
-      success: false,
-      message: 'Email or phone number is required',
-    });
+  if (!identifier || typeof identifier !== 'string') {
+    return res.status(400).json({ success: false, message: 'Email or phone number is required' });
   }
 
-  if (typeof identifier !== 'string') {
-    return res.status(400).json({ success: false, message: 'Invalid identifier format' });
-  }
-
-  // Determine if identifier is email or phone number
   const isEmail = identifier.includes('@');
   const query = isEmail ? { email: identifier } : { phoneNumber: identifier };
 
   const user = await User.findOne(query);
-  if (!user) {
-    return res.status(404).json({
-      success: false,
-      message: 'User not found',
-    });
-  }
+  if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
-  // Generate reset token
-  const resetToken = user.getEmailVerificationToken();
-  await user.save();
+  await sendOtpToUser(user);
 
-  // Send reset link via email or SMS
-  if (isEmail) {
-    try {
-      await sendPasswordResetEmail(identifier, `${process.env.FRONTEND_URL}/reset-password/${resetToken}`);
-    } catch (emailErr) {
-      console.error('Password reset email failed (non-fatal):', emailErr.message || emailErr);
-    }
-    res.status(200).json({
-      success: true,
-      message: 'Password reset link sent to email',
-    });
-  } else {
-    // TODO: Implement SMS sending for phone number
-    // For now, we'll return the token in response (in production, send via SMS)
-    res.status(200).json({
-      success: true,
-      message: 'Password reset link sent via SMS',
-      // In development, include token for testing
-      ...(process.env.NODE_ENV === 'development' && { resetToken }),
-    });
-  }
+  res.status(200).json({
+    success: true,
+    message: 'A 6-digit verification code has been sent to your email',
+    email: user.email,
+  });
 });
 
 /**
- * Reset password
+ * Verify OTP (for forgot password flow)
+ * POST /api/auth/verify-otp
+ */
+const verifyOtp = asyncHandler(async (req, res) => {
+  const { email, otp } = req.body;
+  if (!email || !otp) return res.status(400).json({ success: false, message: 'Email and code are required' });
+
+  const hashedOtp = crypto.createHash('sha256').update(otp).digest('hex');
+  const user = await User.findOne({
+    email,
+    emailVerificationToken: hashedOtp,
+    emailVerificationExpires: { $gt: Date.now() },
+  });
+
+  if (!user) return res.status(400).json({ success: false, message: 'Invalid or expired code' });
+
+  // Issue a short-lived reset token so the next step can reset the password
+  const resetToken = crypto.randomBytes(32).toString('hex');
+  user.emailVerificationToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+  user.emailVerificationExpires = Date.now() + 15 * 60 * 1000; // 15 min
+  await user.save();
+
+  res.status(200).json({ success: true, message: 'Code verified', resetToken });
+});
+
+/**
+ * Reset password with OTP-verified token
  * POST /api/auth/reset-password
  */
 const resetPassword = asyncHandler(async (req, res) => {
   const { token, newPassword, confirmPassword } = req.body;
 
   if (!token || !newPassword || !confirmPassword) {
-    return res.status(400).json({
-      success: false,
-      message: 'All fields are required',
-    });
+    return res.status(400).json({ success: false, message: 'All fields are required' });
   }
 
   if (newPassword !== confirmPassword) {
-    return res.status(400).json({
-      success: false,
-      message: 'Passwords do not match',
-    });
+    return res.status(400).json({ success: false, message: 'Passwords do not match' });
   }
-
-  // Reset password — verify hashed token
-  const hashedResetToken = crypto.createHash('sha256').update(token).digest('hex');
-  const user = await User.findOne({
-    emailVerificationToken: hashedResetToken,
-    emailVerificationExpires: { $gt: Date.now() },
-  });
-
-  if (!user) {
-    return res.status(400).json({
-      success: false,
-      message: 'Invalid or expired token',
-    });
-  }
-
-  user.password = newPassword;
-  user.emailVerificationToken = undefined;
-  user.emailVerificationExpires = undefined;
-  await user.save();
-
-  res.status(200).json({
-    success: true,
-    message: 'Password reset successfully',
-  });
-});
-
-/**
- * Verify email address
- * POST /api/auth/verify-email
- */
-const verifyEmail = asyncHandler(async (req, res) => {
-  const { token, deviceId, deviceName } = req.body;
-  const requestDeviceId = deviceId || req.headers['x-device-id'];
-  const requestDeviceName = deviceName || req.headers['x-device-name'] || 'Verified Device';
-
-  if (!token) return res.status(400).json({ success: false, message: 'Token is required' });
 
   const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
   const user = await User.findOne({
@@ -761,6 +716,34 @@ const verifyEmail = asyncHandler(async (req, res) => {
   });
 
   if (!user) return res.status(400).json({ success: false, message: 'Invalid or expired token' });
+
+  user.password = newPassword;
+  user.emailVerificationToken = undefined;
+  user.emailVerificationExpires = undefined;
+  await user.save();
+
+  res.status(200).json({ success: true, message: 'Password reset successfully' });
+});
+
+/**
+ * Verify email OTP (6-digit code)
+ * POST /api/auth/verify-email
+ */
+const verifyEmail = asyncHandler(async (req, res) => {
+  const { token, otp, deviceId, deviceName } = req.body;
+  const code = otp || token;
+  const requestDeviceId = deviceId || req.headers['x-device-id'];
+  const requestDeviceName = deviceName || req.headers['x-device-name'] || 'Verified Device';
+
+  if (!code) return res.status(400).json({ success: false, message: 'Verification code is required' });
+
+  const hashedCode = crypto.createHash('sha256').update(code).digest('hex');
+  const user = await User.findOne({
+    emailVerificationToken: hashedCode,
+    emailVerificationExpires: { $gt: Date.now() },
+  });
+
+  if (!user) return res.status(400).json({ success: false, message: 'Invalid or expired code' });
 
   user.isEmailVerified = true;
   user.isVerified = user.isEmailVerified || user.isPhoneVerified || user.isBusinessVerified;
@@ -792,9 +775,8 @@ const verifyEmail = asyncHandler(async (req, res) => {
 });
 
 /**
- * Resend email verification
+ * Resend email OTP
  * POST /api/auth/resend-verification
- * Works authenticated (req.userId) or unauthenticated (body.email or body.userId)
  */
 const resendVerification = asyncHandler(async (req, res) => {
   let user;
@@ -808,17 +790,8 @@ const resendVerification = asyncHandler(async (req, res) => {
   if (!user) return res.status(404).json({ success: false, message: 'User not found' });
   if (user.isEmailVerified) return res.status(400).json({ success: false, message: 'Email already verified' });
 
-  const token = user.getEmailVerificationToken();
-  await user.save();
-
-  try {
-    await sendEmailVerificationEmail(
-      user.email, user.firstName,
-      `${process.env.FRONTEND_URL}/verify-email?token=${token}`
-    );
-  } catch (e) { /* non-fatal */ }
-
-  res.status(200).json({ success: true, message: 'Verification email sent' });
+  await sendOtpToUser(user);
+  res.status(200).json({ success: true, message: 'Verification code sent to your email' });
 });
 
 /**
@@ -1078,6 +1051,7 @@ module.exports = {
   uploadProfileImage,
   changePassword,
   forgotPassword,
+  verifyOtp,
   resetPassword,
   verifyEmail,
   resendVerification,
@@ -1091,4 +1065,5 @@ module.exports = {
   sendPhoneOtp,
   verifyPhone,
   refreshAccessToken,
+  sendChangePasswordOtp,
 };
