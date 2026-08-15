@@ -17,6 +17,7 @@ const Notification = require('../models/Notification');
 const CMSPage = require('../models/CMSPage');
 const PlatformSetting = require('../models/PlatformSetting');
 const { asyncHandler } = require('../middleware/errorHandler');
+const { sendPromotionalEmail } = require('../utils/email');
 
 // ─── AUDIT LOG HELPER ────────────────────────────────────────────────────────
 const logAudit = async (req, action, resource, resourceId, details, status = 'success') => {
@@ -37,22 +38,34 @@ const logAudit = async (req, action, resource, resourceId, details, status = 'su
 
 // ─── COMMISSION MANAGEMENT ───────────────────────────────────────────────────
 
+const FEE_KEYS = ['commissionRate', 'minCommission', 'maxCommission', 'payoutSchedule', 'feePercentage'];
+
 const getCommissionSettings = asyncHandler(async (req, res) => {
-  const rows = await PlatformSetting.find({ key: { $in: ['commissionRate', 'minCommission', 'maxCommission', 'payoutSchedule', 'serviceFeePercentage'] } });
-  const commission = rows.reduce((acc, r) => { acc[r.key] = r.value; return acc; }, {});
+  const rows = await PlatformSetting.find({ key: { $in: FEE_KEYS } });
+  const commission = rows.reduce((acc, r) => { acc[r.key] = r.value; return acc; }, {
+    feePercentage: 10,
+  });
   res.json({ success: true, commission });
 });
 
 const updateCommissionSettings = asyncHandler(async (req, res) => {
-  const { commissionRate, minCommission, maxCommission, payoutSchedule, serviceFeePercentage } = req.body;
-  const updates = { commissionRate, minCommission, maxCommission, payoutSchedule, serviceFeePercentage };
+  const { commissionRate, minCommission, maxCommission, payoutSchedule, feePercentage } = req.body;
+  const updates = { commissionRate, minCommission, maxCommission, payoutSchedule, feePercentage };
   for (const [key, value] of Object.entries(updates)) {
     if (value !== undefined) {
-      await PlatformSetting.findOneAndUpdate({ key }, { key, value }, { upsert: true, new: true });
+      const numVal = ['feePercentage', 'commissionRate', 'minCommission', 'maxCommission'].includes(key)
+        ? Number(value)
+        : value;
+      if (key === 'feePercentage' && (isNaN(numVal) || numVal < 0 || numVal > 100)) {
+        return res.status(400).json({ success: false, message: 'feePercentage must be a number between 0 and 100' });
+      }
+      await PlatformSetting.findOneAndUpdate({ key }, { key, value: numVal }, { upsert: true, new: true });
     }
   }
-  const rows = await PlatformSetting.find({ key: { $in: ['commissionRate', 'minCommission', 'maxCommission', 'payoutSchedule', 'serviceFeePercentage'] } });
-  const commission = rows.reduce((acc, r) => { acc[r.key] = r.value; return acc; }, {});
+  const rows = await PlatformSetting.find({ key: { $in: FEE_KEYS } });
+  const commission = rows.reduce((acc, r) => { acc[r.key] = r.value; return acc; }, {
+    feePercentage: 10,
+  });
   await logAudit(req, 'UPDATE_COMMISSION', 'PlatformSetting', null, req.body);
   res.json({ success: true, message: 'Commission settings updated', commission });
 });
@@ -455,6 +468,7 @@ const sendNotification = asyncHandler(async (req, res) => {
   // Send push to targeted users or all users with fcmToken
   try {
     const push = require('../utils/pushNotification');
+    const inApp = require('../utils/inAppNotification');
     let users = [];
     if (notification.type === 'targeted' && notification.targetUsers?.length) {
       users = await User.find({ _id: { $in: notification.targetUsers }, fcmToken: { $ne: null }, 'preferences.notifications': { $ne: false } });
@@ -466,6 +480,20 @@ const sendNotification = asyncHandler(async (req, res) => {
     await Promise.allSettled(
       users.map((u) => push.notifyPromotion(u, notification.title, notification.message))
     );
+    // Send promotional email to all targeted users
+    await Promise.allSettled(
+      users.map((u) =>
+        u.email ? sendPromotionalEmail(u.email, { firstName: u.firstName, title: notification.title, message: notification.message, ctaUrl: notification.ctaUrl, ctaLabel: notification.ctaLabel }) : Promise.resolve()
+      )
+    );
+    // Also create in-app records for targeted/role_based; broadcast is visible via query
+    if (notification.type === 'targeted' && notification.targetUsers?.length) {
+      await Promise.allSettled(
+        notification.targetUsers.map((uid) =>
+          inApp.create(uid, { title: notification.title, message: notification.message, notifType: 'promotional' })
+        )
+      );
+    }
   } catch (pushErr) {
     console.error('Notification push failed (non-fatal):', pushErr.message);
   }
@@ -540,6 +568,79 @@ const getAuditLogs = asyncHandler(async (req, res) => {
   res.json({ success: true, logs, pagination: { current: +page, limit: +limit, total, pages: Math.ceil(total / limit) } });
 });
 
+// ─── CANCELLATION POLICY ─────────────────────────────────────────────────────
+
+const { loadPolicy, loadStrikeThreshold } = require('../utils/cancellation');
+
+/**
+ * GET /api/admin/cancellation-policy
+ * Returns current tiered refund policy + strike threshold
+ */
+const getCancellationPolicy = asyncHandler(async (req, res) => {
+  const [policy, threshold] = await Promise.all([loadPolicy(), loadStrikeThreshold()]);
+  res.json({ success: true, policy, strikeThreshold: threshold });
+});
+
+/**
+ * PUT /api/admin/cancellation-policy
+ * Body: { policy: [{ minDays, refundPct }], strikeThreshold: number }
+ * Tiers must be sorted descending by minDays.
+ */
+const updateCancellationPolicy = asyncHandler(async (req, res) => {
+  const { policy, strikeThreshold } = req.body;
+
+  if (policy !== undefined) {
+    if (!Array.isArray(policy) || policy.some((t) => t.minDays === undefined || t.refundPct === undefined)) {
+      return res.status(400).json({ success: false, message: 'policy must be an array of { minDays, refundPct }' });
+    }
+    await PlatformSetting.findOneAndUpdate(
+      { key: 'cancellationPolicy' },
+      { key: 'cancellationPolicy', value: policy, description: 'Tiered refund policy for client cancellations' },
+      { upsert: true, new: true }
+    );
+  }
+
+  if (strikeThreshold !== undefined) {
+    await PlatformSetting.findOneAndUpdate(
+      { key: 'providerStrikeThreshold' },
+      { key: 'providerStrikeThreshold', value: Number(strikeThreshold), description: 'Provider strikes before auto-suspension' },
+      { upsert: true, new: true }
+    );
+  }
+
+  await logAudit(req, 'UPDATE_CANCELLATION_POLICY', 'PlatformSetting', null, req.body);
+  const [updatedPolicy, updatedThreshold] = await Promise.all([loadPolicy(), loadStrikeThreshold()]);
+  res.json({ success: true, message: 'Cancellation policy updated', policy: updatedPolicy, strikeThreshold: updatedThreshold });
+});
+
+// ─── PROVIDER STRIKE MANAGEMENT ──────────────────────────────────────────────
+
+const getProviderStrikes = asyncHandler(async (req, res) => {
+  const provider = await User.findById(req.params.id).select('firstName lastName email strikeCount isSuspended suspensionReason suspendedAt');
+  if (!provider) return res.status(404).json({ success: false, message: 'Provider not found' });
+  res.json({ success: true, provider });
+});
+
+const resetProviderStrikes = asyncHandler(async (req, res) => {
+  const provider = await User.findById(req.params.id);
+  if (!provider) return res.status(404).json({ success: false, message: 'Provider not found' });
+  provider.strikeCount = 0;
+  await provider.save();
+  await logAudit(req, 'RESET_PROVIDER_STRIKES', 'User', provider._id, {});
+  res.json({ success: true, message: 'Strike count reset', strikeCount: 0 });
+});
+
+const unsuspendProvider = asyncHandler(async (req, res) => {
+  const provider = await User.findById(req.params.id);
+  if (!provider) return res.status(404).json({ success: false, message: 'Provider not found' });
+  provider.isSuspended = false;
+  provider.suspensionReason = undefined;
+  provider.suspendedAt = undefined;
+  await provider.save();
+  await logAudit(req, 'UNSUSPEND_PROVIDER', 'User', provider._id, {});
+  res.json({ success: true, message: 'Provider unsuspended', provider });
+});
+
 module.exports = {
   // Commission
   getCommissionSettings,
@@ -590,4 +691,11 @@ module.exports = {
   deleteCMSPage,
   // Audit Logs
   getAuditLogs,
+  // Cancellation Policy
+  getCancellationPolicy,
+  updateCancellationPolicy,
+  // Provider Strikes
+  getProviderStrikes,
+  resetProviderStrikes,
+  unsuspendProvider,
 };

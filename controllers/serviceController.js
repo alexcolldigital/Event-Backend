@@ -6,6 +6,7 @@
 const Service = require('../models/Service');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { uploadToCloudinary } = require('../utils/fileUpload');
+const { sendServiceAddedEmail } = require('../utils/email');
 
 /**
  * Create new service
@@ -69,7 +70,22 @@ const createService = asyncHandler(async (req, res) => {
   });
 
   await service.save();
-  await service.populate('provider', 'firstName lastName businessName');
+  await service.populate('provider', 'firstName lastName businessName email');
+
+  // Notify provider by email (non-blocking)
+  try {
+    const prov = service.provider;
+    if (prov && prov.email) {
+      await sendServiceAddedEmail(prov.email, {
+        firstName: prov.firstName,
+        serviceName: service.name,
+        serviceType: service.serviceType,
+        category: service.category,
+        basePrice: service.pricing?.basePrice,
+        serviceId: service._id,
+      });
+    }
+  } catch (_) {}
 
   res.status(201).json({
     success: true,

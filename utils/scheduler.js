@@ -5,7 +5,8 @@ const Payout = require('../models/Payout');
 const User = require('../models/User');
 const { BOOKING_STATUS, PAYMENT_STATUS, PAYMENT_PLAN } = require('../config/constants');
 const push = require('./pushNotification');
-const { sendBalanceDueReminderEmail } = require('./email');
+const inApp = require('./inAppNotification');
+const { sendBalanceDueReminderEmail, sendBookingReminderEmail } = require('./email');
 
 const processExpiredAcceptances = async () => {
   try {
@@ -35,6 +36,7 @@ const processExpiredAcceptances = async () => {
       try {
         const client = await User.findById(booking.client);
         push.notifyCancellation(client, booking);
+        await inApp.create(booking.client, { title: 'Booking Cancelled', message: `Booking #${booking.bookingNumber} was cancelled (provider did not respond in time).`, notifType: 'cancellation_alert', relatedId: booking._id });
       } catch (_) {}
     }
   } catch (err) {
@@ -115,6 +117,11 @@ const processBookingReminders = async () => {
       try {
         const client = await User.findById(booking.client);
         await push.notifyBookingReminder(client, booking);
+        await inApp.create(booking.client, { title: 'Booking Reminder', message: `Reminder: Your booking #${booking.bookingNumber} is tomorrow.`, notifType: 'booking_reminder', relatedId: booking._id });
+        if (client?.email) {
+          const svc = await require('../models/Service').findById(booking.service).select('name').catch(() => null);
+          await sendBookingReminderEmail(client.email, { firstName: client.firstName, bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, eventTime: booking.eventTime, serviceName: svc?.name });
+        }
         booking.reminderSent = true;
         await booking.save();
       } catch (err) {
@@ -145,6 +152,7 @@ const processBalanceDueReminders = async () => {
         const client = await User.findById(booking.client);
         const daysLeft = Math.ceil((new Date(booking.eventDate) - now) / (1000 * 60 * 60 * 24));
         push.notifyBalanceDueReminder(client, booking, daysLeft);
+        await inApp.create(booking.client, { title: 'Balance Payment Reminder', message: `Your event is in ${daysLeft} day(s). Please pay the remaining ₦${Number(booking.balanceDue).toLocaleString()} for booking #${booking.bookingNumber}.`, notifType: 'booking_reminder', relatedId: booking._id });
         if (client?.email) {
           await sendBalanceDueReminderEmail(client.email, {
             bookingNumber: booking.bookingNumber,

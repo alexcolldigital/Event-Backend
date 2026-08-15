@@ -5,7 +5,7 @@
 
 const crypto = require('crypto');
 const User = require('../models/User');
-const { generateToken } = require('../config/jwt');
+const { generateToken, generateRefreshToken } = require('../config/jwt');
 const { asyncHandler } = require('../middleware/errorHandler');
 const {
   sendWelcomeEmail,
@@ -13,6 +13,7 @@ const {
   sendApprovalEmail,
   sendTwoFactorEmail,
   sendEmailVerificationEmail,
+  sendVerificationCodeEmail,
 } = require('../utils/email');
 const { USER_ROLES } = require('../config/constants');
 
@@ -161,12 +162,20 @@ const registerServiceProvider = asyncHandler(async (req, res) => {
 
   await user.save();
 
+  // Send email verification
+  const verificationToken = user.getEmailVerificationToken();
+  await user.save();
+  sendEmailVerificationEmail(
+    email, firstName,
+    `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`
+  ).catch(() => {});
+
   // Generate token
   const token = generateToken(user._id, user.role);
 
   res.status(201).json({
     success: true,
-    message: 'Service provider registered successfully',
+    message: 'Service provider registered successfully. Please verify your email.',
     token,
     user: formatUser(user),
   });
@@ -200,7 +209,7 @@ const performLogin = async (user, req, res) => {
       success: true,
       requiresTwoFactor: true,
       userId: user._id,
-      message: '2FA code sent to your email',
+      message: '2FA code sent to your email. Do not share it.',
     });
   }
 
@@ -218,11 +227,13 @@ const performLogin = async (user, req, res) => {
   }
 
   const token = generateToken(user._id, user.role);
+  const refreshToken = generateRefreshToken(user._id);
 
   return res.status(200).json({
     success: true,
     message: 'Login successful',
     token,
+    refreshToken,
     user: formatUser(user),
     suspicious,
   });
@@ -253,7 +264,7 @@ const loginUser = asyncHandler(async (req, res) => {
 });
 
 /**
- * Login user with phone number
+ * Login user with phone number (requires verified phone)
  * POST /api/auth/login-phone
  */
 const loginWithPhone = asyncHandler(async (req, res) => {
@@ -271,6 +282,15 @@ const loginWithPhone = asyncHandler(async (req, res) => {
     const { ip, userAgent, deviceId } = getRequestMeta(req);
     await user.addLoginHistory({ ip, userAgent, deviceId, success: false });
     return res.status(401).json({ success: false, message: 'Invalid credentials' });
+  }
+
+  if (!user.isPhoneVerified) {
+    return res.status(403).json({
+      success: false,
+      message: 'Phone number not verified. Please verify your phone number from your profile before logging in with it.',
+      requiresPhoneVerification: true,
+      userId: user._id,
+    });
   }
 
   return performLogin(user, req, res);
@@ -301,6 +321,16 @@ const loginUnified = asyncHandler(async (req, res) => {
     const { ip, userAgent, deviceId } = getRequestMeta(req);
     await user.addLoginHistory({ ip, userAgent, deviceId, success: false });
     return res.status(401).json({ success: false, message: 'Invalid credentials' });
+  }
+
+  // Phone login requires verified phone number
+  if (!isEmail && !user.isPhoneVerified) {
+    return res.status(403).json({
+      success: false,
+      message: 'Phone number not verified. Please verify your phone number from your profile before logging in with it.',
+      requiresPhoneVerification: true,
+      userId: user._id,
+    });
   }
 
   return performLogin(user, req, res);
@@ -338,19 +368,42 @@ const updateProfile = asyncHandler(async (req, res) => {
       return res.status(400).json({ success: false, message: 'Email is already in use' });
     }
     user.email = email;
+    // Reset email verification when email changes
+    user.isEmailVerified = false;
+    user.isVerified = false;
+    const verificationToken = user.getEmailVerificationToken();
+    sendEmailVerificationEmail(
+      email, user.firstName,
+      `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`
+    ).catch(() => {});
+  }
+
+  if (phoneNumber && phoneNumber !== user.phoneNumber) {
+    const existingPhone = await User.findOne({ phoneNumber });
+    if (existingPhone && existingPhone._id.toString() !== userId) {
+      return res.status(400).json({ success: false, message: 'Phone number is already in use' });
+    }
+    user.phoneNumber = phoneNumber;
+    // Reset phone verification when phone changes
+    user.isPhoneVerified = false;
+    user.isVerified = false;
   }
 
   if (firstName !== undefined) user.firstName = firstName;
   if (lastName !== undefined) user.lastName = lastName;
-  if (phoneNumber !== undefined) user.phoneNumber = phoneNumber;
   if (bio !== undefined) user.bio = bio;
   if (address !== undefined) user.address = address;
   if (businessName !== undefined) user.businessName = businessName;
   if (businessDescription !== undefined) user.businessDescription = businessDescription;
   if (preferences !== undefined && typeof preferences === 'object') {
+    const existing = user.preferences ? user.preferences.toObject ? user.preferences.toObject() : { ...user.preferences } : {};
     user.preferences = {
-      ...user.preferences,
+      ...existing,
       ...preferences,
+      pushPrefs: {
+        ...(existing.pushPrefs || {}),
+        ...(preferences.pushPrefs || {}),
+      },
     };
   }
 
@@ -360,6 +413,7 @@ const updateProfile = asyncHandler(async (req, res) => {
     success: true,
     message: 'Profile updated successfully',
     user,
+    phoneVerificationRequired: phoneNumber && phoneNumber !== req.body._originalPhone ? true : undefined,
   });
 });
 
@@ -511,8 +565,10 @@ const resetPassword = asyncHandler(async (req, res) => {
     });
   }
 
+  // Reset password — verify hashed token
+  const hashedResetToken = crypto.createHash('sha256').update(token).digest('hex');
   const user = await User.findOne({
-    emailVerificationToken: token,
+    emailVerificationToken: hashedResetToken,
     emailVerificationExpires: { $gt: Date.now() },
   });
 
@@ -542,14 +598,17 @@ const verifyEmail = asyncHandler(async (req, res) => {
   const { token } = req.body;
   if (!token) return res.status(400).json({ success: false, message: 'Token is required' });
 
+  // Verify email token (compare SHA-256 hash)
+  const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
   const user = await User.findOne({
-    emailVerificationToken: token,
+    emailVerificationToken: hashedToken,
     emailVerificationExpires: { $gt: Date.now() },
   });
 
   if (!user) return res.status(400).json({ success: false, message: 'Invalid or expired token' });
 
   user.isEmailVerified = true;
+  user.isVerified = true;
   user.emailVerificationToken = undefined;
   user.emailVerificationExpires = undefined;
   await user.save();
@@ -590,11 +649,13 @@ const verifyTwoFactor = asyncHandler(async (req, res) => {
   const user = await User.findById(userId).select('+twoFactorCode +twoFactorExpires');
   if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
+  // Verify 2FA code (compare SHA-256 hash)
+  const hashedCode = crypto.createHash('sha256').update(code).digest('hex');
   if (!user.twoFactorCode || user.twoFactorExpires < Date.now()) {
     return res.status(400).json({ success: false, message: '2FA code expired. Please login again.' });
   }
 
-  if (user.twoFactorCode !== code) {
+  if (user.twoFactorCode !== hashedCode) {
     await user.incFailedLogins();
     return res.status(401).json({ success: false, message: 'Invalid 2FA code' });
   }
@@ -606,8 +667,9 @@ const verifyTwoFactor = asyncHandler(async (req, res) => {
   const { ip, userAgent, deviceId } = getRequestMeta(req);
   await user.addLoginHistory({ ip, userAgent, deviceId, success: true });
 
-  const token = generateToken(user._id, user.role);
-  res.status(200).json({ success: true, message: 'Login successful', token, user: formatUser(user) });
+  const jwtToken = generateToken(user._id, user.role);
+  const refreshToken = generateRefreshToken(user._id);
+  res.status(200).json({ success: true, message: 'Login successful', token: jwtToken, refreshToken, user: formatUser(user) });
 });
 
 /**
@@ -688,6 +750,115 @@ const removeDevice = asyncHandler(async (req, res) => {
 });
 
 /**
+ * Send phone OTP — works from profile to verify current phone number
+ * Optionally accepts a new phoneNumber to update before sending OTP
+ * POST /api/auth/send-phone-otp
+ */
+const sendPhoneOtp = asyncHandler(async (req, res) => {
+  const { phoneNumber } = req.body; // optional: update phone before sending OTP
+
+  const user = await User.findById(req.userId);
+  if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+  // If a new phone number is provided, update it first
+  if (phoneNumber && phoneNumber !== user.phoneNumber) {
+    const existing = await User.findOne({ phoneNumber });
+    if (existing && existing._id.toString() !== req.userId) {
+      return res.status(400).json({ success: false, message: 'Phone number already in use by another account' });
+    }
+    user.phoneNumber = phoneNumber;
+    user.isPhoneVerified = false;
+    user.isVerified = false;
+    await user.save();
+  }
+
+  if (user.isPhoneVerified && !phoneNumber) {
+    return res.status(400).json({ success: false, message: 'Phone number is already verified' });
+  }
+
+  const otp = await user.generatePhoneOtp();
+
+  // Development: return OTP in response for testing
+  if (process.env.NODE_ENV === 'development') {
+    return res.status(200).json({
+      success: true,
+      message: `OTP sent to ${user.phoneNumber}`,
+      otp, // remove in production
+      phoneNumber: user.phoneNumber,
+    });
+  }
+
+  // Production: send via SMS gateway (Termii, Twilio, etc.)
+  // TODO: await smsProvider.send(user.phoneNumber, `Your Event Compass verification code is: ${otp}`);
+  console.log(`[PHONE OTP] ${user.phoneNumber} => ${otp}`);
+
+  res.status(200).json({
+    success: true,
+    message: `OTP sent to ${user.phoneNumber}. Enter it to verify your number.`,
+    phoneNumber: user.phoneNumber,
+  });
+});
+
+/**
+ * Verify phone OTP — called from profile screen
+ * POST /api/auth/verify-phone
+ */
+const verifyPhone = asyncHandler(async (req, res) => {
+  const { otp } = req.body;
+  if (!otp) return res.status(400).json({ success: false, message: 'OTP is required' });
+
+  const user = await User.findById(req.userId).select('+phoneOtp +phoneOtpExpires');
+  if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+  if (!user.phoneOtp || !user.phoneOtpExpires) {
+    return res.status(400).json({ success: false, message: 'No OTP found. Please request a new one.' });
+  }
+
+  if (!user.verifyPhoneOtp(otp)) {
+    return res.status(400).json({ success: false, message: 'Invalid or expired OTP. Please request a new one.' });
+  }
+
+  user.isPhoneVerified = true;
+  // isVerified = true when either email or phone is verified
+  user.isVerified = user.isEmailVerified || true;
+  user.phoneOtp = undefined;
+  user.phoneOtpExpires = undefined;
+  await user.save();
+
+  res.status(200).json({
+    success: true,
+    message: 'Phone number verified successfully. You can now log in with your phone number.',
+    isPhoneVerified: true,
+    isEmailVerified: user.isEmailVerified,
+  });
+});
+
+/**
+ * Refresh access token
+ * POST /api/auth/refresh-token
+ */
+const refreshAccessToken = asyncHandler(async (req, res) => {
+  const { refreshToken } = req.body;
+  if (!refreshToken) return res.status(400).json({ success: false, message: 'Refresh token required' });
+
+  const { verifyRefreshToken, generateToken } = require('../config/jwt');
+  let decoded;
+  try {
+    decoded = verifyRefreshToken(refreshToken);
+  } catch {
+    return res.status(401).json({ success: false, message: 'Invalid or expired refresh token' });
+  }
+
+  const user = await User.findById(decoded.id);
+  if (!user || !user.isActive || user.isBlocked) {
+    return res.status(401).json({ success: false, message: 'User not authorized' });
+  }
+
+  const newToken = generateToken(user._id, user.role);
+  res.status(200).json({ success: true, token: newToken });
+});
+
+/**
  * Get admin contact list (for messaging support)
  * GET /api/auth/admin-contacts
  */
@@ -718,4 +889,7 @@ module.exports = {
   addDevice,
   removeDevice,
   getAdminContacts,
+  sendPhoneOtp,
+  verifyPhone,
+  refreshAccessToken,
 };

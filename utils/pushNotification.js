@@ -83,6 +83,26 @@ const notifyBookingUpdate = (user, booking) => {
   );
 };
 
+const notifyBookingAccepted = (user, booking) => {
+  if (!isPrefEnabled(user, 'bookingUpdates')) return;
+  return sendPush(
+    user.fcmToken,
+    'Booking Accepted! 🎉',
+    `Your booking #${booking.bookingNumber} has been accepted. Proceed to payment.`,
+    { type: 'booking_accepted', bookingId: String(booking._id) }
+  );
+};
+
+const notifyBookingRejected = (user, booking) => {
+  if (!isPrefEnabled(user, 'bookingUpdates')) return;
+  return sendPush(
+    user.fcmToken,
+    'Booking Rejected',
+    `Your booking #${booking.bookingNumber} was declined. Reason: ${booking.cancellationReason || 'No reason provided'}.`,
+    { type: 'booking_rejected', bookingId: String(booking._id) }
+  );
+};
+
 const notifyPaymentConfirmation = (user, booking) => {
   if (!isPrefEnabled(user, 'paymentConfirmation')) return;
   return sendPush(
@@ -151,6 +171,8 @@ const notifyNewMessage = (user, senderName, preview) => {
 module.exports = {
   sendPush,
   notifyBookingUpdate,
+  notifyBookingAccepted,
+  notifyBookingRejected,
   notifyPaymentConfirmation,
   notifyBookingReminder,
   notifyCancellation,

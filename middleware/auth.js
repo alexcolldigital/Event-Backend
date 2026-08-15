@@ -1,88 +1,76 @@
 /**
  * Authentication Middleware
- * Handles user authentication and authorization
  */
 
 const { verifyToken } = require('../config/jwt');
 const User = require('../models/User');
 
 /**
- * Verify JWT token and attach user to request
+ * Verify JWT and attach user — blocks inactive/blocked accounts
  */
 const authenticate = async (req, res, next) => {
   try {
-    // Get token from header
-    const token = req.headers.authorization?.split(' ')[1];
-
-    if (!token) {
-      return res.status(401).json({
-        success: false,
-        message: 'No authentication token provided',
-      });
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ success: false, message: 'No authentication token provided' });
     }
 
-    // Verify token
+    const token = authHeader.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'Malformed authorization header' });
+    }
+
     const decoded = verifyToken(token);
 
-    // Attach user to request
-    const user = await User.findById(decoded.id);
+    const user = await User.findById(decoded.id).select(
+      '+twoFactorCode +twoFactorExpires +twoFactorSecret'
+    );
+
     if (!user) {
-      return res.status(404).json({
+      return res.status(401).json({ success: false, message: 'User no longer exists' });
+    }
+
+    if (!user.isActive) {
+      return res.status(403).json({ success: false, message: 'Account is inactive' });
+    }
+
+    if (user.isBlocked) {
+      return res.status(403).json({
         success: false,
-        message: 'User not found',
+        message: `Account is blocked. Reason: ${user.blockReason || 'Policy violation'}`,
       });
     }
 
     req.user = user;
-    req.userId = decoded.id;
+    req.userId = String(decoded.id);
+    req.userRole = user.role;
     next();
   } catch (error) {
-    return res.status(401).json({
-      success: false,
-      message: error.message || 'Invalid token',
-    });
+    return res.status(401).json({ success: false, message: 'Invalid or expired token' });
   }
 };
 
 /**
- * Authorize user by role
- * @param {...string} roles - Allowed roles
+ * Authorize by role(s)
  */
-const authorize = (...roles) => {
-  return (req, res, next) => {
-    if (!req.user) {
-      return res.status(401).json({
-        success: false,
-        message: 'Not authenticated',
-      });
-    }
-
-    if (!roles.includes(req.user.role)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized',
-      });
-    }
-
-    next();
-  };
-};
-
-/**
- * Check if user is service provider
- */
-const isServiceProvider = (req, res, next) => {
-  if (req.user.role !== 'service_provider') {
-    return res.status(403).json({
-      success: false,
-      message: 'Only service providers can access this resource',
-    });
+const authorize = (...roles) => (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: 'Not authenticated' });
+  }
+  if (!roles.includes(req.user.role)) {
+    return res.status(403).json({ success: false, message: 'Insufficient permissions' });
   }
   next();
 };
 
-module.exports = {
-  authenticate,
-  authorize,
-  isServiceProvider,
+/**
+ * Service provider only
+ */
+const isServiceProvider = (req, res, next) => {
+  if (req.user?.role !== 'service_provider' && req.user?.role !== 'admin') {
+    return res.status(403).json({ success: false, message: 'Only service providers can access this resource' });
+  }
+  next();
 };
+
+module.exports = { authenticate, authorize, isServiceProvider };

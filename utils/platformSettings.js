@@ -14,7 +14,7 @@ const DEFAULT_SETTINGS = {
     { daysBefore: 0, percentage: 0 },
   ],
   platformCommissionPercentage: 15,
-  serviceFeePercentage: 10,
+  feePercentage: 10,
   commissionRate: 10,
   minCommission: 0,
   providerStrikeThreshold: 3,

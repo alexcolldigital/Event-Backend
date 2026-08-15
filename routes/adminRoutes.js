@@ -50,10 +50,22 @@ router.get('/reports', adminController.getSystemReports);
 router.get('/analytics/dashboard', ext.getAnalyticsDashboard);
 router.get('/reports/detailed', ext.getDetailedReports);
 
-// Commission management
+// Commission & fee management
 router.get('/commission', ext.getCommissionSettings);
 router.put('/commission', ext.updateCommissionSettings);
 router.get('/commission/breakdown', ext.getCommissionBreakdown);
+// Dedicated fee settings (service fee + delivery fee percentages)
+router.get('/settings/fees', ext.getCommissionSettings);
+router.put('/settings/fees', ext.updateCommissionSettings);
+
+// Cancellation policy
+router.get('/cancellation-policy', ext.getCancellationPolicy);
+router.put('/cancellation-policy', ext.updateCancellationPolicy);
+
+// Provider strike management
+router.get('/providers/:id/strikes', ext.getProviderStrikes);
+router.post('/providers/:id/strikes/reset', ext.resetProviderStrikes);
+router.post('/providers/:id/unsuspend', ext.unsuspendProvider);
 
 // Payment monitoring
 router.get('/payments', ext.getAllPayments);

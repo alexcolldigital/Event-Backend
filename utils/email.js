@@ -289,6 +289,253 @@ const sendBalanceDueReminderEmail = async (email, details) => {
   }
 };
 
+// ─── Shared HTML layout ──────────────────────────────────────────────────────
+const layout = (title, body) => `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>${title}</title>
+  <style>
+    body{margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;color:#333}
+    .wrap{max-width:600px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08)}
+    .hdr{background:linear-gradient(135deg,#4F46E5,#7C3AED);padding:28px 40px;text-align:center}
+    .hdr h1{color:#fff;margin:0;font-size:22px;font-weight:700}
+    .bdy{padding:32px 40px}
+    .bdy p{line-height:1.7;margin:0 0 14px;font-size:15px}
+    .box{background:#f8f7ff;border-left:4px solid #4F46E5;border-radius:6px;padding:16px 20px;margin:18px 0}
+    .box table{width:100%;border-collapse:collapse}
+    .box td{padding:5px 0;font-size:14px}
+    .box td:first-child{color:#666;width:45%}
+    .box td:last-child{font-weight:600;color:#1a1a2e}
+    .btn{display:inline-block;background:#4F46E5;color:#fff!important;padding:12px 26px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;margin:6px 0}
+    .btn-red{background:#dc2626}.btn-green{background:#16a34a}
+    .alert{border-radius:8px;padding:13px 16px;margin:14px 0;font-size:14px}
+    .aw{background:#fef9c3;border:1px solid #fde047;color:#854d0e}
+    .ae{background:#fee2e2;border:1px solid #fca5a5;color:#991b1b}
+    .as{background:#dcfce7;border:1px solid #86efac;color:#166534}
+    .ftr{background:#f8f7ff;padding:18px 40px;text-align:center;font-size:12px;color:#888;border-top:1px solid #ede9fe}
+    .ftr a{color:#4F46E5;text-decoration:none}
+    hr{border:none;border-top:1px solid #ede9fe;margin:22px 0}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hdr"><h1>&#129517; Event Compass</h1></div>
+    <div class="bdy">${body}</div>
+    <div class="ftr">&copy; ${new Date().getFullYear()} Event Compass &nbsp;|&nbsp;<a href="${process.env.FRONTEND_URL||'#'}">Platform</a> &nbsp;|&nbsp;<a href="mailto:support@eventcompass.com">Support</a></div>
+  </div>
+</body></html>`;
+
+/**
+ * Booking reminder email
+ */
+const sendBookingReminderEmail = async (email, details) => {
+  if (!isEmailConfigured()) return;
+  const { firstName, bookingNumber, eventDate, eventTime, serviceName } = details;
+  try {
+    await transporter.sendMail({
+      from: process.env.FROM_EMAIL, to: email,
+      subject: `⏰ Reminder: Your Event is Tomorrow — Booking #${bookingNumber}`,
+      html: layout('Booking Reminder', `
+        <p>Hi <strong>${firstName}</strong>,</p>
+        <p>Your upcoming event is <strong>tomorrow</strong>. Here are your details:</p>
+        <div class="box"><table>
+          <tr><td>Booking #</td><td>${bookingNumber}</td></tr>
+          <tr><td>Service</td><td>${serviceName||'N/A'}</td></tr>
+          <tr><td>Date</td><td>${new Date(eventDate).toDateString()}</td></tr>
+          ${eventTime?`<tr><td>Time</td><td>${eventTime}</td></tr>`:''}
+        </table></div>
+        <div class="alert as">✅ Your booking is confirmed. Please ensure everything is ready!</div>
+        <p style="text-align:center"><a href="${process.env.FRONTEND_URL||'#'}/bookings" class="btn">View Booking</a></p>
+        <p>We hope you have a wonderful event! 🎉</p>`),
+    });
+  } catch (e) { console.error('Booking reminder email error:', e); }
+};
+
+/**
+ * Cancellation alert email
+ */
+const sendCancellationAlertEmail = async (email, details) => {
+  if (!isEmailConfigured()) return;
+  const { firstName, bookingNumber, eventDate, serviceName, reason, refundEligible } = details;
+  try {
+    await transporter.sendMail({
+      from: process.env.FROM_EMAIL, to: email,
+      subject: `❌ Booking Cancelled — #${bookingNumber}`,
+      html: layout('Booking Cancelled', `
+        <p>Hi <strong>${firstName}</strong>,</p>
+        <p>Your booking has been <strong>cancelled</strong>.</p>
+        <div class="box"><table>
+          <tr><td>Booking #</td><td>${bookingNumber}</td></tr>
+          <tr><td>Service</td><td>${serviceName||'N/A'}</td></tr>
+          <tr><td>Event Date</td><td>${new Date(eventDate).toDateString()}</td></tr>
+          ${reason?`<tr><td>Reason</td><td>${reason}</td></tr>`:''}
+        </table></div>
+        ${refundEligible
+          ?'<div class="alert aw">💳 A refund has been initiated and will be processed within 3–5 business days.</div>'
+          :'<div class="alert ae">ℹ️ This booking was not eligible for a refund per the cancellation policy.</div>'}
+        <p style="text-align:center"><a href="mailto:support@eventcompass.com" class="btn btn-red">Contact Support</a></p>`),
+    });
+  } catch (e) { console.error('Cancellation alert email error:', e); }
+};
+
+/**
+ * Promotional notification email
+ */
+const sendPromotionalEmail = async (email, details) => {
+  if (!isEmailConfigured()) return;
+  const { firstName, title, message, ctaUrl, ctaLabel } = details;
+  try {
+    await transporter.sendMail({
+      from: process.env.FROM_EMAIL, to: email,
+      subject: `🎁 ${title} — Event Compass`,
+      html: layout(title, `
+        <p>Hi${firstName?` <strong>${firstName}</strong>`:''},</p>
+        <p>${message}</p>
+        ${ctaUrl?`<p style="text-align:center"><a href="${ctaUrl}" class="btn">${ctaLabel||'Explore Now'}</a></p>`:''}
+        <hr/>
+        <p style="font-size:12px;color:#999">You're receiving this because you have an Event Compass account. Manage preferences in your profile settings.</p>`),
+    });
+  } catch (e) { console.error('Promotional email error:', e); }
+};
+
+/**
+ * New message notification email
+ */
+const sendNewMessageEmail = async (email, details) => {
+  if (!isEmailConfigured()) return;
+  const { firstName, senderName, preview, conversationUrl } = details;
+  try {
+    await transporter.sendMail({
+      from: process.env.FROM_EMAIL, to: email,
+      subject: `💬 New Message from ${senderName}`,
+      html: layout('New Message', `
+        <p>Hi <strong>${firstName}</strong>,</p>
+        <p>You have a new message from <strong>${senderName}</strong>:</p>
+        <div class="box"><p style="margin:0;font-style:italic;color:#555">&ldquo;${preview}&rdquo;</p></div>
+        <p style="text-align:center"><a href="${conversationUrl||(process.env.FRONTEND_URL||'#')+'/messages'}" class="btn">Reply Now</a></p>
+        <p style="font-size:12px;color:#999">Manage message notifications in your profile settings.</p>`),
+    });
+  } catch (e) { console.error('New message email error:', e); }
+};
+
+/**
+ * Booking accepted email
+ */
+const sendBookingAcceptedEmail = async (email, details) => {
+  if (!isEmailConfigured()) return;
+  const { firstName, bookingNumber, eventDate, serviceName, providerName, totalAmount, checkoutUrl } = details;
+  try {
+    await transporter.sendMail({
+      from: process.env.FROM_EMAIL, to: email,
+      subject: `🎉 Booking Accepted — #${bookingNumber}`,
+      html: layout('Booking Accepted', `
+        <p>Hi <strong>${firstName}</strong>,</p>
+        <p><strong>${providerName||'Your service provider'}</strong> has <strong>accepted</strong> your booking request.</p>
+        <div class="box"><table>
+          <tr><td>Booking #</td><td>${bookingNumber}</td></tr>
+          <tr><td>Service</td><td>${serviceName||'N/A'}</td></tr>
+          <tr><td>Event Date</td><td>${new Date(eventDate).toDateString()}</td></tr>
+          <tr><td>Total Amount</td><td>&#8358;${Number(totalAmount||0).toLocaleString()}</td></tr>
+        </table></div>
+        <div class="alert as">✅ Proceed to payment to secure your slot.</div>
+        <p style="text-align:center"><a href="${checkoutUrl||(process.env.FRONTEND_URL||'#')+'/bookings'}" class="btn btn-green">Proceed to Payment</a></p>`),
+    });
+  } catch (e) { console.error('Booking accepted email error:', e); }
+};
+
+/**
+ * Booking rejected email
+ */
+const sendBookingRejectedEmail = async (email, details) => {
+  if (!isEmailConfigured()) return;
+  const { firstName, bookingNumber, eventDate, serviceName, reason } = details;
+  try {
+    await transporter.sendMail({
+      from: process.env.FROM_EMAIL, to: email,
+      subject: `Booking Request Declined — #${bookingNumber}`,
+      html: layout('Booking Declined', `
+        <p>Hi <strong>${firstName}</strong>,</p>
+        <p>Your booking request has been <strong>declined</strong> by the service provider.</p>
+        <div class="box"><table>
+          <tr><td>Booking #</td><td>${bookingNumber}</td></tr>
+          <tr><td>Service</td><td>${serviceName||'N/A'}</td></tr>
+          <tr><td>Event Date</td><td>${new Date(eventDate).toDateString()}</td></tr>
+          ${reason?`<tr><td>Reason</td><td>${reason}</td></tr>`:''}
+        </table></div>
+        <div class="alert aw">💡 There are many other great providers on Event Compass. Browse alternatives below.</div>
+        <p style="text-align:center"><a href="${process.env.FRONTEND_URL||'#'}/search" class="btn">Find Another Provider</a></p>`),
+    });
+  } catch (e) { console.error('Booking rejected email error:', e); }
+};
+
+/**
+ * Service added confirmation email (to provider)
+ */
+const sendServiceAddedEmail = async (email, details) => {
+  if (!isEmailConfigured()) return;
+  const { firstName, serviceName, serviceType, category, basePrice, serviceId } = details;
+  try {
+    await transporter.sendMail({
+      from: process.env.FROM_EMAIL, to: email,
+      subject: `✅ Your Service "${serviceName}" is Now Live!`,
+      html: layout('Service Published', `
+        <p>Hi <strong>${firstName}</strong>,</p>
+        <p>Your service has been successfully listed on Event Compass and is now visible to clients.</p>
+        <div class="box"><table>
+          <tr><td>Service Name</td><td>${serviceName}</td></tr>
+          <tr><td>Type</td><td>${serviceType||'N/A'}</td></tr>
+          <tr><td>Category</td><td>${category||'N/A'}</td></tr>
+          <tr><td>Base Price</td><td>&#8358;${Number(basePrice||0).toLocaleString()}</td></tr>
+        </table></div>
+        <div class="alert as">🚀 Clients can now discover and book your service. Keep your availability up to date!</div>
+        <p style="text-align:center"><a href="${process.env.FRONTEND_URL||'#'}/services/${serviceId||''}" class="btn">View Your Listing</a></p>`),
+    });
+  } catch (e) { console.error('Service added email error:', e); }
+};
+
+/**
+ * Provider account suspended email
+ */
+const sendProviderSuspensionEmail = async (email, details) => {
+  if (!isEmailConfigured()) return;
+  const { firstName, strikeCount, threshold } = details;
+  try {
+    await transporter.sendMail({
+      from: process.env.FROM_EMAIL, to: email,
+      subject: '⚠️ Your Event Compass Account Has Been Suspended',
+      html: layout('Account Suspended', `
+        <p>Hi <strong>${firstName}</strong>,</p>
+        <p>Your service provider account has been <strong>automatically suspended</strong> because you have accumulated <strong>${strikeCount} cancellation strike(s)</strong> (threshold: ${threshold}).</p>
+        <div class="alert ae">🚫 You can no longer accept new bookings while your account is suspended.</div>
+        <p>Each strike is issued when a provider cancels a booking <em>after</em> it has already been accepted. This protects clients from last-minute disruptions.</p>
+        <p>To appeal this suspension, please contact our support team.</p>
+        <p style="text-align:center"><a href="mailto:support@eventcompass.com" class="btn btn-red">Contact Support</a></p>`),
+    });
+  } catch (e) { console.error('Provider suspension email error:', e); }
+};
+
+/**
+ * Verification code (OTP) email
+ */
+const sendVerificationCodeEmail = async (email, firstName, code) => {
+  if (!isEmailConfigured()) return;
+  try {
+    await transporter.sendMail({
+      from: process.env.FROM_EMAIL, to: email,
+      subject: `Your Event Compass Verification Code: ${code}`,
+      html: layout('Verification Code', `
+        <p>Hi <strong>${firstName}</strong>,</p>
+        <p>Use the code below to complete your action on Event Compass:</p>
+        <div style="text-align:center;margin:28px 0">
+          <span style="display:inline-block;background:#f8f7ff;border:2px dashed #4F46E5;border-radius:12px;padding:18px 40px;font-size:38px;font-weight:800;letter-spacing:12px;color:#4F46E5">${code}</span>
+        </div>
+        <div class="alert aw">⏱️ This code expires in <strong>10 minutes</strong>. Do not share it with anyone.</div>
+        <p>If you did not request this, please ignore this email or contact support immediately.</p>`),
+    });
+  } catch (e) { console.error('Verification code email error:', e); }
+};
+
 module.exports = {
   sendWelcomeEmail,
   sendBookingConfirmationEmail,
@@ -299,4 +546,13 @@ module.exports = {
   sendTwoFactorEmail,
   sendDepositPaidEmail,
   sendBalanceDueReminderEmail,
+  sendBookingReminderEmail,
+  sendCancellationAlertEmail,
+  sendPromotionalEmail,
+  sendNewMessageEmail,
+  sendBookingAcceptedEmail,
+  sendBookingRejectedEmail,
+  sendServiceAddedEmail,
+  sendVerificationCodeEmail,
+  sendProviderSuspensionEmail,
 };

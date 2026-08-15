@@ -5,6 +5,7 @@ const { asyncHandler } = require('../middleware/errorHandler');
 const { sanitizeChatMessage } = require('../utils/trust');
 const { uploadToCloudinary } = require('../utils/fileUpload');
 const push = require('../utils/pushNotification');
+const { sendNewMessageEmail } = require('../utils/email');
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -84,12 +85,18 @@ const sendMessage = asyncHandler(async (req, res) => {
     io.to(String(receiverId)).emit('new_message_notification', { conversationId, message });
   }
 
-  // Push new message notification (non-blocking)
+  // Push + email new message notification (non-blocking)
   try {
-    if (receiver.fcmToken) {
-      const senderName = `${message.sender.firstName} ${message.sender.lastName}`;
-      const preview = messageContent.length > 60 ? messageContent.slice(0, 60) + '…' : messageContent;
-      push.notifyNewMessage(receiver, senderName, preview);
+    const senderName = `${message.sender.firstName} ${message.sender.lastName}`;
+    const preview = messageContent.length > 80 ? messageContent.slice(0, 80) + '…' : messageContent;
+    if (receiver.fcmToken) push.notifyNewMessage(receiver, senderName, preview);
+    if (receiver.email) {
+      await sendNewMessageEmail(receiver.email, {
+        firstName: receiver.firstName,
+        senderName,
+        preview,
+        conversationUrl: `${process.env.FRONTEND_URL || ''}/messages/${message.conversationId}`,
+      });
     }
   } catch (_) {}
 

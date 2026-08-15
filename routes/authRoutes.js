@@ -5,21 +5,12 @@
 
 const express = require('express');
 const { body } = require('express-validator');
-const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const authController = require('../controllers/authController');
 const { authenticate } = require('../middleware/auth');
 const { validateRequest } = require('../middleware/validation');
 const { createSingleUploadMiddleware } = require('../utils/fileUpload');
-
-// Strict rate limiter for auth endpoints (fraud/brute-force protection)
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  message: { success: false, message: 'Too many attempts. Please try again in 15 minutes.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+const { authLimiter, otpLimiter } = require('../middleware/security');
 
 // Register route
 router.post(
@@ -174,6 +165,32 @@ router.post(
 // Get admin contacts (for messaging support)
 router.get('/admin-contacts', authenticate, authController.getAdminContacts);
 
+// Phone OTP verification (from profile)
+router.post(
+  '/send-phone-otp',
+  authenticate,
+  otpLimiter,
+  [body('phoneNumber').optional().isMobilePhone().withMessage('Valid phone number required')],
+  validateRequest,
+  authController.sendPhoneOtp
+);
+router.post(
+  '/verify-phone',
+  authenticate,
+  otpLimiter,
+  [body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits')],
+  validateRequest,
+  authController.verifyPhone
+);
+
+// Refresh access token
+router.post(
+  '/refresh-token',
+  [body('refreshToken').notEmpty().withMessage('refreshToken is required')],
+  validateRequest,
+  authController.refreshAccessToken
+);
+
 // FCM token registration
 router.post(
   '/fcm-token',
@@ -190,5 +207,55 @@ router.post(
     }
   }
 );
+
+// User in-app notifications
+router.get('/notifications', authenticate, async (req, res) => {
+  try {
+    const Notification = require('../models/Notification');
+    const { page = 1, limit = 20 } = req.query;
+    const skip = (page - 1) * limit;
+    const query = {
+      $or: [
+        { recipient: req.userId },
+        { type: 'broadcast', status: 'sent' },
+        { type: 'role_based', targetRole: { $in: ['all', req.user.role] }, status: 'sent' },
+      ],
+    };
+    const [notifications, total, unreadCount] = await Promise.all([
+      Notification.find(query).sort({ createdAt: -1 }).skip(skip).limit(parseInt(limit)),
+      Notification.countDocuments(query),
+      Notification.countDocuments({ ...query, isRead: false, readBy: { $ne: req.userId } }),
+    ]);
+    res.json({ success: true, notifications, total, unreadCount, page: parseInt(page) });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.patch('/notifications/:id/read', authenticate, async (req, res) => {
+  try {
+    const Notification = require('../models/Notification');
+    await Notification.findByIdAndUpdate(req.params.id, {
+      $addToSet: { readBy: req.userId },
+      $set: { isRead: true },
+    });
+    res.json({ success: true, message: 'Marked as read' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.patch('/notifications/read-all', authenticate, async (req, res) => {
+  try {
+    const Notification = require('../models/Notification');
+    await Notification.updateMany(
+      { $or: [{ recipient: req.userId }, { type: { $in: ['broadcast', 'role_based'] }, status: 'sent' }], readBy: { $ne: req.userId } },
+      { $addToSet: { readBy: req.userId }, $set: { isRead: true } }
+    );
+    res.json({ success: true, message: 'All marked as read' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
 module.exports = router;

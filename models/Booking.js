@@ -68,7 +68,7 @@ const bookingSchema = new mongoose.Schema(
       quantity: Number,
       unitPrice: Number,
       subtotal: Number,
-      tax: Number,
+      serviceAndDeliveryFee: Number,
       discount: Number,
       totalAmount: Number,
       currency: {
@@ -100,6 +100,7 @@ const bookingSchema = new mongoose.Schema(
     depositAmount: Number,
     balanceDue: Number,
     balancePaid: { type: Boolean, default: false },
+    balanceDeadline: Date, // 2 days before eventDate — client must pay balance by this date
 
     // Instant Booking
     instantBooking: { type: Boolean, default: false },
@@ -188,6 +189,11 @@ const bookingSchema = new mongoose.Schema(
     completedDate: Date,
     cancelledDate: Date,
     cancellationReason: String,
+    cancellationMeta: {
+      cancelledBy: { type: String, enum: ['client', 'provider', 'admin'] },
+      refundPct: Number,
+      refundAmount: Number,
+    },
 
     // Ratings & Reviews
     rating: {

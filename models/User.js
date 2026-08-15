@@ -5,6 +5,7 @@
 
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const { USER_ROLES, SERVICE_PROVIDER_TYPES } = require('../config/constants');
 
 const userSchema = new mongoose.Schema(
@@ -219,7 +220,11 @@ const userSchema = new mongoose.Schema(
       },
     },
 
-    // Verification Tokens
+    // Phone OTP Verification
+    phoneOtp: { type: String, select: false },
+    phoneOtpExpires: { type: Date, select: false },
+
+    // Verification Tokens (stored as SHA-256 hashes)
     emailVerificationToken: String,
     emailVerificationExpires: Date,
     passwordResetToken: String,
@@ -290,14 +295,43 @@ userSchema.methods.comparePassword = async function (enteredPassword) {
 };
 
 /**
- * Generate email verification token
- * @returns {string} - Verification token
+ * Generate cryptographically secure email verification token
+ * Stores SHA-256 hash in DB, returns raw token to send via email
  */
 userSchema.methods.getEmailVerificationToken = function () {
-  const verificationToken = Math.random().toString(36).substring(2, 15);
-  this.emailVerificationToken = verificationToken;
-  this.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
-  return verificationToken;
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  this.emailVerificationToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+  this.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000;
+  return rawToken;
+};
+
+/**
+ * Generate cryptographically secure password reset token
+ */
+userSchema.methods.getPasswordResetToken = function () {
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  this.passwordResetToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+  this.passwordResetExpires = Date.now() + 60 * 60 * 1000; // 1 hour
+  return rawToken;
+};
+
+/**
+ * Generate 6-digit phone OTP
+ */
+userSchema.methods.generatePhoneOtp = async function () {
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  this.phoneOtp = crypto.createHash('sha256').update(otp).digest('hex');
+  this.phoneOtpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+  await this.save();
+  return otp;
+};
+
+/**
+ * Verify phone OTP
+ */
+userSchema.methods.verifyPhoneOtp = function (otp) {
+  const hashed = crypto.createHash('sha256').update(otp).digest('hex');
+  return this.phoneOtp === hashed && this.phoneOtpExpires > Date.now();
 };
 
 /**
@@ -349,12 +383,12 @@ userSchema.methods.addLoginHistory = async function (entry) {
 };
 
 /**
- * Generate 6-digit 2FA code
+ * Generate 6-digit 2FA code (stored as SHA-256 hash)
  */
 userSchema.methods.generateTwoFactorCode = async function () {
   const code = Math.floor(100000 + Math.random() * 900000).toString();
-  this.twoFactorCode = code;
-  this.twoFactorExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+  this.twoFactorCode = crypto.createHash('sha256').update(code).digest('hex');
+  this.twoFactorExpires = new Date(Date.now() + 10 * 60 * 1000);
   await this.save();
   return code;
 };
@@ -369,7 +403,10 @@ userSchema.methods.toJSON = function () {
   delete obj.passwordResetToken;
   delete obj.twoFactorCode;
   delete obj.twoFactorSecret;
+  delete obj.phoneOtp;
+  delete obj.phoneOtpExpires;
   delete obj.accountNumber;
+  delete obj.bankCode;
   return obj;
 };
 

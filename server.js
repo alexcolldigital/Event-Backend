@@ -14,9 +14,9 @@ const mongoose = require('mongoose');
 const helmet = require('helmet');
 const cors = require('cors');
 const morgan = require('morgan');
-const rateLimit = require('express-rate-limit');
 const connectDB = require('./config/database');
 const { errorHandler } = require('./middleware/errorHandler');
+const { sanitizeInputs, stripXSS, preventHPP, globalApiLimiter } = require('./middleware/security');
 const User = require('./models/User');
 const Service = require('./models/Service');
 const { USER_ROLES } = require('./config/constants');
@@ -162,7 +162,24 @@ initializeDatabase().catch((error) => {
 });
 
 // Middleware
-app.use(helmet()); // Security headers
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:', 'https://res.cloudinary.com'],
+      connectSrc: ["'self'"],
+      frameSrc: ["'none'"],
+      objectSrc: ["'none'"],
+    },
+  },
+  crossOriginEmbedderPolicy: false,
+  hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
+  noSniff: true,
+  xssFilter: true,
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+}));
 
 const allowedOrigins = [
   'https://event-compass-theta.vercel.app',
@@ -185,18 +202,13 @@ app.use(cors({
 }));
 app.use(morgan('dev')); // Logging
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
-  message: 'Too many requests, please try again later.',
-});
+// Security: NoSQL injection prevention, XSS stripping, HPP
+app.use(sanitizeInputs);
+app.use(stripXSS);
+app.use(preventHPP);
 
-app.use('/api/', (req, res, next) => {
-  // Exclude Paystack webhook from rate limiting (high-frequency external calls)
-  if (req.path.startsWith('/bookings/webhook')) return next();
-  return limiter(req, res, next);
-});
+// Global API rate limiting
+app.use('/api/', globalApiLimiter);
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
@@ -302,13 +314,12 @@ const startServer = (port = PORT) => {
     console.log(`🌐 CORS enabled for: ${process.env.FRONTEND_URL}`);
   });
 
-  httpServer.on('error', (error) => {
+  server.once('error', (error) => {
     if (error.code === 'EADDRINUSE') {
       console.warn(`Port ${port} is busy. Trying ${port + 1}...`);
-      setImmediate(() => startServer(port + 1));
+      server.close(() => startServer(port + 1));
       return;
     }
-
     console.error('Server startup error:', error);
     process.exit(1);
   });

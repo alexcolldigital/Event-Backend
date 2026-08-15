@@ -8,6 +8,7 @@ const Booking = require('../models/Booking');
 const Service = require('../models/Service');
 const Payment = require('../models/Payment');
 const Analytics = require('../models/Analytics');
+const PlatformSetting = require('../models/PlatformSetting');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { BOOKING_STATUS, PAYMENT_STATUS } = require('../config/constants');
 
@@ -739,14 +740,13 @@ const adminConfirmBooking = asyncHandler(async (req, res) => {
   if (adminSetPrices && adminSetPrices.length > 0) {
     booking.adminSetPrices = adminSetPrices;
     const extraCost = adminSetPrices.reduce((sum, s) => sum + (Number(s.price) || 0), 0);
-    const PlatformSetting = require('../models/PlatformSetting');
-    const feeSetting = await PlatformSetting.findOne({ key: 'serviceFeePercentage' });
+    const feeSetting = await PlatformSetting.findOne({ key: 'feePercentage' });
     const feeRate = feeSetting ? Number(feeSetting.value) / 100 : 0.10;
     const newSubtotal = (booking.pricing.subtotal || 0) + extraCost;
-    const newTax = newSubtotal * feeRate;
-    const newTotal = newSubtotal + newTax;
+    const serviceAndDeliveryFee = newSubtotal * feeRate;
+    const newTotal = newSubtotal + serviceAndDeliveryFee;
     booking.pricing.subtotal = newSubtotal;
-    booking.pricing.tax = newTax;
+    booking.pricing.serviceAndDeliveryFee = serviceAndDeliveryFee;
     booking.pricing.totalAmount = newTotal;
     // Recalculate deposit/balance if split plan
     const { PAYMENT_PLAN } = require('../config/constants');

@@ -7,7 +7,8 @@ const Booking = require('../models/Booking');
 const Payment = require('../models/Payment');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { BOOKING_STATUS, PAYMENT_STATUS, PAYMENT_PLAN, RESCHEDULE_STATUS, REFUND_STATUS } = require('../config/constants');
-const { sendBookingConfirmationEmail, sendDepositPaidEmail, sendBalanceDueReminderEmail } = require('../utils/email');
+const { sendBookingConfirmationEmail, sendDepositPaidEmail, sendBalanceDueReminderEmail, sendCancellationAlertEmail, sendBookingAcceptedEmail, sendBookingRejectedEmail, sendProviderSuspensionEmail } = require('../utils/email');
+const { calcClientRefund, applyProviderStrike, loadStrikeThreshold } = require('../utils/cancellation');
 const { isBookingWithinCoverage } = require('../utils/locationMatcher');
 const { buildCartCheckoutPayloads } = require('../utils/cartCheckout');
 const { buildCheckoutSessionPayload } = require('../utils/payment');
@@ -15,6 +16,7 @@ const gateway = require('../utils/gateway');
 const PlatformSetting = require('../models/PlatformSetting');
 const Payout = require('../models/Payout');
 const push = require('../utils/pushNotification');
+const inApp = require('../utils/inAppNotification');
 
 /**
  * Create new booking
@@ -84,6 +86,26 @@ const createBooking = asyncHandler(async (req, res) => {
         subtotal: service.pricing.basePrice * (numberOfGuests || 1),
       };
     }
+  } else {
+    const Venue = require('../models/Venue');
+    const venue = await Venue.findById(venueId);
+    if (!venue) {
+      return res.status(404).json({ success: false, message: 'Venue not found' });
+    }
+    serviceProvider = venue.owner;
+    pricing = {
+      basePrice: venue.rentalPrice?.daily || venue.rentalPrice?.hourly || 0,
+      quantity: duration || 1,
+      unitPrice: venue.rentalPrice?.daily || venue.rentalPrice?.hourly || 0,
+      subtotal: (venue.rentalPrice?.daily || venue.rentalPrice?.hourly || 0) * (duration || 1),
+    };
+  }
+
+  const feeSetting = await PlatformSetting.findOne({ key: 'feePercentage' });
+  const subtotal = pricing.subtotal || 0;
+  const feeRate = feeSetting ? Number(feeSetting.value) / 100 : 0.10;
+  const serviceAndDeliveryFee = subtotal * feeRate;
+  const totalAmount = subtotal + serviceAndDeliveryFee;
 
   const bookingNumber = `EC-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 
@@ -96,15 +118,20 @@ const createBooking = asyncHandler(async (req, res) => {
   let depositAmount = 0;
   let balanceDue = 0;
   if (selectedPlan === PAYMENT_PLAN.SPLIT_50_50) {
-    depositAmount = totalAmount / 2;
-    balanceDue = totalAmount / 2;
+    depositAmount = Math.round(totalAmount * 0.5 * 100) / 100;
+    balanceDue = Math.round((totalAmount - depositAmount) * 100) / 100;
   } else if (selectedPlan === PAYMENT_PLAN.DEPOSIT_20) {
-    depositAmount = totalAmount * 0.2;
-    balanceDue = totalAmount * 0.8;
+    depositAmount = Math.round(totalAmount * 0.2 * 100) / 100;
+    balanceDue = Math.round((totalAmount - depositAmount) * 100) / 100;
   } else {
     depositAmount = totalAmount;
     balanceDue = 0;
   }
+
+  // Balance must be paid 2 days before the event date
+  const balanceDeadline = selectedPlan !== PAYMENT_PLAN.FULL
+    ? new Date(new Date(eventDate).getTime() - 2 * 24 * 60 * 60 * 1000)
+    : null;
 
   let booking = new Booking({
     bookingNumber,
@@ -124,13 +151,14 @@ const createBooking = asyncHandler(async (req, res) => {
     bookingLocation,
     pricing: {
       ...pricing,
-      tax,
+      serviceAndDeliveryFee,
       totalAmount,
     },
     vendorAcceptDeadline,
     paymentPlan: selectedPlan,
     depositAmount,
     balanceDue,
+    balanceDeadline,
     instantBooking: !!instantBooking,
     bookingRequestNote,
     status: instantBooking ? BOOKING_STATUS.CONFIRMED : BOOKING_STATUS.PENDING,
@@ -216,10 +244,11 @@ const checkoutCart = asyncHandler(async (req, res) => {
       };
     }
 
-    const feeSettingCheckout = await PlatformSetting.findOne({ key: 'serviceFeePercentage' });
-    const serviceFeeRateCheckout = feeSettingCheckout ? Number(feeSettingCheckout.value) / 100 : 0.10;
-    const tax = pricing.subtotal ? pricing.subtotal * serviceFeeRateCheckout : 0;
-    const totalAmount = pricing.subtotal + tax;
+    const feeSettingCheckout = await PlatformSetting.findOne({ key: 'feePercentage' });
+    const checkoutSubtotal = pricing.subtotal || 0;
+    const feeRateCheckout = feeSettingCheckout ? Number(feeSettingCheckout.value) / 100 : 0.10;
+    const serviceAndDeliveryFeeCheckout = checkoutSubtotal * feeRateCheckout;
+    const totalAmount = checkoutSubtotal + serviceAndDeliveryFeeCheckout;
 
     const bookingNumber = `EC-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 
@@ -241,7 +270,7 @@ const checkoutCart = asyncHandler(async (req, res) => {
       bookingLocation,
       pricing: {
         ...pricing,
-        tax,
+        serviceAndDeliveryFee: serviceAndDeliveryFeeCheckout,
         totalAmount,
       },
       status: BOOKING_STATUS.PENDING,
@@ -408,6 +437,7 @@ const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
     try {
       const client = booking.client;
       push.notifyDepositPaid(client, booking);
+      await inApp.create(client._id || client, { title: 'Deposit Confirmed', message: `Deposit for booking #${booking.bookingNumber} received. Balance due: ₦${Number(booking.balanceDue).toLocaleString()}.`, notifType: 'deposit_paid', relatedId: booking._id });
       if (client.email) {
         await sendDepositPaidEmail(client.email, {
           bookingNumber: booking.bookingNumber,
@@ -432,6 +462,7 @@ const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
     try {
       const client = booking.client;
       push.notifyPaymentConfirmation(client, booking);
+      await inApp.create(client._id || client, { title: 'Payment Confirmed', message: `Full payment for booking #${booking.bookingNumber} confirmed.`, notifType: 'payment_confirmation', relatedId: booking._id });
       if (client.email) {
         await sendBookingConfirmationEmail(client.email, {
           bookingNumber: booking.bookingNumber,
@@ -560,7 +591,19 @@ const rejectBooking = asyncHandler(async (req, res) => {
   try {
     const User = require('../models/User');
     const client = await User.findById(booking.client);
-    if (client) push.notifyBookingUpdate(client, booking);
+    if (client) {
+      push.notifyBookingRejected(client, booking);
+      await inApp.create(client._id, {
+        title: 'Booking Rejected',
+        message: `Your booking #${booking.bookingNumber} was declined. Reason: ${booking.cancellationReason || 'No reason provided'}.`,
+        notifType: 'booking_rejected',
+        relatedId: booking._id,
+      });
+      if (client.email) {
+        const svc = await require('../models/Service').findById(booking.service).select('name').catch(() => null);
+        await sendBookingRejectedEmail(client.email, { firstName: client.firstName, bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, serviceName: svc?.name, reason: booking.cancellationReason });
+      }
+    }
   } catch (_) {}
 
   res.status(200).json({ success: true, message: 'Booking rejected', booking });
@@ -642,7 +685,18 @@ const confirmBooking = asyncHandler(async (req, res) => {
           status: booking.status,
         });
       }
-      push.notifyBookingUpdate(client, booking);
+      push.notifyBookingAccepted(client, booking);
+      await inApp.create(client._id, {
+        title: 'Booking Accepted! 🎉',
+        message: `Your booking #${booking.bookingNumber} has been accepted. Proceed to payment.`,
+        notifType: 'booking_accepted',
+        relatedId: booking._id,
+      });
+      if (client.email) {
+        const svc = await require('../models/Service').findById(booking.service).select('name').catch(() => null);
+        const provider = await require('../models/User').findById(booking.serviceProvider).select('firstName lastName businessName').catch(() => null);
+        await sendBookingAcceptedEmail(client.email, { firstName: client.firstName, bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, serviceName: svc?.name, providerName: provider?.businessName || `${provider?.firstName||''} ${provider?.lastName||''}`.trim(), totalAmount: booking.pricing.totalAmount, checkoutUrl });
+      }
     }
   } catch (emailErr) {
     console.error('Booking confirmation notification failed (non-fatal):', emailErr.message || emailErr);
@@ -660,59 +714,137 @@ const confirmBooking = asyncHandler(async (req, res) => {
 /**
  * Cancel booking
  * PATCH /api/bookings/:id/cancel
+ *
+ * Behaviour:
+ *  - CLIENT cancels: tiered refund based on days-until-event (admin-configurable policy)
+ *  - PROVIDER cancels after accepting (status === confirmed): full refund to client + strike;
+ *    enough strikes auto-suspends the provider account
+ *  - PROVIDER cancels before accepting (status === pending): no payment taken yet, no refund needed
  */
 const cancelBooking = asyncHandler(async (req, res) => {
   const { reason } = req.body;
   const booking = await Booking.findById(req.params.id);
 
-  if (!booking) {
-    return res.status(404).json({
-      success: false,
-      message: 'Booking not found',
-    });
-  }
+  if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
-  if (
-    booking.client.toString() !== req.userId &&
-    booking.serviceProvider.toString() !== req.userId
-  ) {
-    return res.status(403).json({
-      success: false,
-      message: 'Not authorized to cancel this booking',
-    });
+  const isClient = booking.client.toString() === req.userId;
+  const isProvider = booking.serviceProvider.toString() === req.userId;
+
+  if (!isClient && !isProvider && req.user.role !== 'admin') {
+    return res.status(403).json({ success: false, message: 'Not authorized to cancel this booking' });
   }
 
   if (booking.status === BOOKING_STATUS.CANCELLED) {
-    return res.status(400).json({
-      success: false,
-      message: 'Booking is already cancelled',
-    });
+    return res.status(400).json({ success: false, message: 'Booking is already cancelled' });
   }
 
+  if ([BOOKING_STATUS.COMPLETED].includes(booking.status)) {
+    return res.status(400).json({ success: false, message: 'Cannot cancel a completed booking' });
+  }
+
+  const hasPaid = booking.payment.status === PAYMENT_STATUS.COMPLETED ||
+    booking.depositPaid;
+  const paidAmount = booking.depositPaid && !booking.balancePaid
+    ? booking.depositAmount
+    : booking.pricing?.totalAmount || 0;
+
+  let refundAmount = 0;
+  let refundPct = 0;
+  let providerStrikeResult = null;
+  let cancelledBy = isClient ? 'client' : 'provider';
+
+  // ── Provider cancels after accepting ──────────────────────────────────────
+  if (isProvider && booking.status === BOOKING_STATUS.CONFIRMED) {
+    // Full refund regardless of timing
+    refundPct = 100;
+    refundAmount = hasPaid ? paidAmount : 0;
+
+    // Apply strike + possible auto-suspend
+    try {
+      const User = require('../models/User');
+      const provider = await User.findById(booking.serviceProvider);
+      if (provider) {
+        providerStrikeResult = await applyProviderStrike(provider);
+        const threshold = await loadStrikeThreshold();
+        if (providerStrikeResult.suspended && provider.email) {
+          await sendProviderSuspensionEmail(provider.email, {
+            firstName: provider.firstName,
+            strikeCount: providerStrikeResult.strikes,
+            threshold,
+          });
+        }
+      }
+    } catch (_) {}
+  }
+
+  // ── Client cancels (or provider cancels a still-pending booking) ──────────
+  if (isClient && hasPaid) {
+    const result = await calcClientRefund(paidAmount, booking.eventDate);
+    refundPct = result.refundPct;
+    refundAmount = result.refundAmount;
+  }
+
+  // ── Persist cancellation ──────────────────────────────────────────────────
   booking.status = BOOKING_STATUS.CANCELLED;
   booking.cancelledDate = new Date();
   booking.cancellationReason = reason;
+  booking.cancellationMeta = { cancelledBy, refundPct, refundAmount };
 
-  if (booking.payment.status === PAYMENT_STATUS.COMPLETED) {
-    booking.payment.refundStatus = 'pending';
+  if (hasPaid) {
+    booking.payment.refundStatus = refundAmount > 0 ? 'pending' : 'none';
+    booking.payment.refundAmount = refundAmount;
   }
 
   await booking.save();
 
-  // Push cancellation alert to both parties (non-blocking)
+  // ── Notifications ─────────────────────────────────────────────────────────
   try {
     const User = require('../models/User');
     const [client, provider] = await Promise.all([
       User.findById(booking.client),
       User.findById(booking.serviceProvider),
     ]);
-    push.notifyCancellation(client, booking);
-    push.notifyCancellation(provider, booking);
+    const cancelMsg = `Booking #${booking.bookingNumber} has been cancelled.`;
+    const serviceName = booking.service?.name || booking.venue?.name || 'N/A';
+
+    if (client) {
+      push.notifyCancellation(client, booking);
+      await inApp.create(client._id, { title: 'Booking Cancelled', message: cancelMsg, notifType: 'cancellation_alert', relatedId: booking._id });
+      if (client.email) {
+        await sendCancellationAlertEmail(client.email, {
+          firstName: client.firstName,
+          bookingNumber: booking.bookingNumber,
+          eventDate: booking.eventDate,
+          serviceName,
+          reason: booking.cancellationReason,
+          refundEligible: refundAmount > 0,
+          refundAmount,
+          refundPct,
+        });
+      }
+    }
+    if (provider) {
+      push.notifyCancellation(provider, booking);
+      await inApp.create(provider._id, { title: 'Booking Cancelled', message: cancelMsg, notifType: 'cancellation_alert', relatedId: booking._id });
+      if (provider.email) {
+        await sendCancellationAlertEmail(provider.email, {
+          firstName: provider.firstName,
+          bookingNumber: booking.bookingNumber,
+          eventDate: booking.eventDate,
+          serviceName,
+          reason: booking.cancellationReason,
+          refundEligible: false,
+        });
+      }
+    }
   } catch (_) {}
 
   res.status(200).json({
     success: true,
     message: 'Booking cancelled successfully',
+    refundPct,
+    refundAmount,
+    providerStrike: providerStrikeResult,
     booking,
   });
 });
@@ -753,6 +885,7 @@ const completeBooking = asyncHandler(async (req, res) => {
     const User = require('../models/User');
     const client = await User.findById(booking.client);
     push.notifyBookingUpdate(client, booking);
+    if (client) await inApp.create(client._id, { title: 'Booking Completed', message: `Your booking #${booking.bookingNumber} has been marked as completed.`, notifType: 'booking_update', relatedId: booking._id });
   } catch (_) {}
 
   res.status(200).json({
@@ -860,8 +993,9 @@ const _upsertPaymentRecord = async (booking, reference, paidAmount, paymentType)
     const client = booking.client?._id || booking.client;
     const provider = booking.serviceProvider?._id || booking.serviceProvider;
     const total = booking.pricing?.totalAmount || 0;
-    const feeSettingPayment = await PlatformSetting.findOne({ key: 'serviceFeePercentage' });
-    const commissionRate = feeSettingPayment ? Number(feeSettingPayment.value) / 100 : 0.10;
+    const feeSettingPayment = await PlatformSetting.findOne({ key: 'feePercentage' });
+    const feeRatePayment = feeSettingPayment ? Number(feeSettingPayment.value) / 100 : 0.10;
+    const commissionRate = feeRatePayment;
     const platformFee = paidAmount * commissionRate;
     const payeeAmount = paidAmount - platformFee;
     const txnId = reference || `TXN-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
