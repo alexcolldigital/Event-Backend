@@ -5,30 +5,46 @@
 
 const nodemailer = require('nodemailer');
 
-const isEmailConfigured = () =>
-  process.env.SMTP_HOST &&
-  process.env.SMTP_USER &&
-  process.env.SMTP_PASS &&
-  !process.env.SMTP_USER.includes('your_') &&
-  !process.env.SMTP_PASS.includes('your_');
+const isTruthy = (value) => ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase());
 
-// Create transporter
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: process.env.SMTP_PORT,
-  secure: false,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
+const isEmailConfigured = () =>
+  Boolean(
+    process.env.SMTP_HOST &&
+      process.env.SMTP_USER &&
+      process.env.SMTP_PASS &&
+      !process.env.SMTP_USER.includes('your_') &&
+      !process.env.SMTP_PASS.includes('your_')
+  );
+
+const isEmailEnabled = () => {
+  const explicitFlag = process.env.EMAILS_ENABLED ?? process.env.ENABLE_EMAILS;
+
+  if (explicitFlag !== undefined) {
+    return isTruthy(explicitFlag);
+  }
+
+  return process.env.NODE_ENV === 'production' && isEmailConfigured();
+};
+
+const getTransporter = () => {
+  if (!isEmailEnabled()) return null;
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: process.env.SMTP_PORT || 587,
+    secure: Number(process.env.SMTP_PORT || 587) === 465,
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    },
+  });
+};
 
 /**
  * Send welcome email
  */
 const sendWelcomeEmail = async (email, firstName, activationUrl) => {
-  if (!isEmailConfigured()) {
-    console.log('Email not configured; skipping welcome email');
+  if (!isEmailEnabled()) {
+    console.log('Email delivery is disabled; skipping welcome email');
     return;
   }
 
@@ -45,7 +61,7 @@ const sendWelcomeEmail = async (email, firstName, activationUrl) => {
   };
 
   try {
-    await transporter.sendMail(mailOptions);
+    await getTransporter().sendMail(mailOptions);
     console.log('Welcome email sent to:', email);
   } catch (error) {
     console.error('Error sending welcome email:', error);
@@ -56,8 +72,8 @@ const sendWelcomeEmail = async (email, firstName, activationUrl) => {
  * Send booking confirmation email
  */
 const sendBookingConfirmationEmail = async (email, bookingDetails) => {
-  if (!isEmailConfigured()) {
-    console.log('Email not configured; skipping booking confirmation email');
+  if (!isEmailEnabled()) {
+    console.log('Email delivery is disabled; skipping booking confirmation email');
     return;
   }
 
@@ -79,7 +95,7 @@ const sendBookingConfirmationEmail = async (email, bookingDetails) => {
   };
 
   try {
-    await transporter.sendMail(mailOptions);
+    await getTransporter().sendMail(mailOptions);
     console.log('Booking confirmation email sent to:', email);
   } catch (error) {
     console.error('Error sending booking email:', error);
@@ -90,8 +106,8 @@ const sendBookingConfirmationEmail = async (email, bookingDetails) => {
  * Send payment receipt email
  */
 const sendPaymentReceiptEmail = async (email, paymentDetails) => {
-  if (!isEmailConfigured()) {
-    console.log('Email not configured; skipping payment receipt email');
+  if (!isEmailEnabled()) {
+    console.log('Email delivery is disabled; skipping payment receipt email');
     return;
   }
 
@@ -112,7 +128,7 @@ const sendPaymentReceiptEmail = async (email, paymentDetails) => {
   };
 
   try {
-    await transporter.sendMail(mailOptions);
+    await getTransporter().sendMail(mailOptions);
     console.log('Payment receipt email sent to:', email);
   } catch (error) {
     console.error('Error sending payment email:', error);
@@ -123,8 +139,8 @@ const sendPaymentReceiptEmail = async (email, paymentDetails) => {
  * Send password reset email
  */
 const sendPasswordResetEmail = async (email, resetUrl) => {
-  if (!isEmailConfigured()) {
-    console.log('Email not configured; skipping password reset email');
+  if (!isEmailEnabled()) {
+    console.log('Email delivery is disabled; skipping password reset email');
     return;
   }
 
@@ -142,7 +158,7 @@ const sendPasswordResetEmail = async (email, resetUrl) => {
   };
 
   try {
-    await transporter.sendMail(mailOptions);
+    await getTransporter().sendMail(mailOptions);
     console.log('Password reset email sent to:', email);
   } catch (error) {
     console.error('Error sending password reset email:', error);
@@ -153,8 +169,8 @@ const sendPasswordResetEmail = async (email, resetUrl) => {
  * Send email verification email
  */
 const sendEmailVerificationEmail = async (email, firstName, verificationUrl) => {
-  if (!isEmailConfigured()) {
-    console.log('Email not configured; skipping verification email');
+  if (!isEmailEnabled()) {
+    console.log('Email delivery is disabled; skipping verification email');
     return;
   }
   const mailOptions = {
@@ -169,7 +185,7 @@ const sendEmailVerificationEmail = async (email, firstName, verificationUrl) => 
     `,
   };
   try {
-    await transporter.sendMail(mailOptions);
+    await getTransporter().sendMail(mailOptions);
   } catch (error) {
     console.error('Error sending verification email:', error);
   }
@@ -179,8 +195,8 @@ const sendEmailVerificationEmail = async (email, firstName, verificationUrl) => 
  * Send 2FA code email
  */
 const sendTwoFactorEmail = async (email, firstName, code) => {
-  if (!isEmailConfigured()) {
-    console.log('Email not configured; skipping 2FA email');
+  if (!isEmailEnabled()) {
+    console.log('Email delivery is disabled; skipping 2FA email');
     return;
   }
   const mailOptions = {
@@ -196,7 +212,7 @@ const sendTwoFactorEmail = async (email, firstName, code) => {
     `,
   };
   try {
-    await transporter.sendMail(mailOptions);
+    await getTransporter().sendMail(mailOptions);
   } catch (error) {
     console.error('Error sending 2FA email:', error);
   }
@@ -206,8 +222,8 @@ const sendTwoFactorEmail = async (email, firstName, code) => {
  * Send service provider approval email
  */
 const sendApprovalEmail = async (email, providerName) => {
-  if (!isEmailConfigured()) {
-    console.log('Email not configured; skipping approval email');
+  if (!isEmailEnabled()) {
+    console.log('Email delivery is disabled; skipping approval email');
     return;
   }
 
@@ -224,7 +240,7 @@ const sendApprovalEmail = async (email, providerName) => {
   };
 
   try {
-    await transporter.sendMail(mailOptions);
+    await getTransporter().sendMail(mailOptions);
     console.log('Approval email sent to:', email);
   } catch (error) {
     console.error('Error sending approval email:', error);
@@ -255,7 +271,7 @@ const sendDepositPaidEmail = async (email, details) => {
     `,
   };
   try {
-    await transporter.sendMail(mailOptions);
+    await getTransporter().sendMail(mailOptions);
   } catch (error) {
     console.error('Error sending deposit paid email:', error);
   }
@@ -283,7 +299,7 @@ const sendBalanceDueReminderEmail = async (email, details) => {
     `,
   };
   try {
-    await transporter.sendMail(mailOptions);
+    await getTransporter().sendMail(mailOptions);
   } catch (error) {
     console.error('Error sending balance reminder email:', error);
   }
@@ -333,7 +349,7 @@ const sendBookingReminderEmail = async (email, details) => {
   if (!isEmailConfigured()) return;
   const { firstName, bookingNumber, eventDate, eventTime, serviceName } = details;
   try {
-    await transporter.sendMail({
+    await getTransporter().sendMail({
       from: process.env.FROM_EMAIL, to: email,
       subject: `⏰ Reminder: Your Event is Tomorrow — Booking #${bookingNumber}`,
       html: layout('Booking Reminder', `
@@ -359,7 +375,7 @@ const sendCancellationAlertEmail = async (email, details) => {
   if (!isEmailConfigured()) return;
   const { firstName, bookingNumber, eventDate, serviceName, reason, refundEligible } = details;
   try {
-    await transporter.sendMail({
+    await getTransporter().sendMail({
       from: process.env.FROM_EMAIL, to: email,
       subject: `❌ Booking Cancelled — #${bookingNumber}`,
       html: layout('Booking Cancelled', `
@@ -386,7 +402,7 @@ const sendPromotionalEmail = async (email, details) => {
   if (!isEmailConfigured()) return;
   const { firstName, title, message, ctaUrl, ctaLabel } = details;
   try {
-    await transporter.sendMail({
+    await getTransporter().sendMail({
       from: process.env.FROM_EMAIL, to: email,
       subject: `🎁 ${title} — Event Compass`,
       html: layout(title, `
@@ -406,7 +422,7 @@ const sendNewMessageEmail = async (email, details) => {
   if (!isEmailConfigured()) return;
   const { firstName, senderName, preview, conversationUrl } = details;
   try {
-    await transporter.sendMail({
+    await getTransporter().sendMail({
       from: process.env.FROM_EMAIL, to: email,
       subject: `💬 New Message from ${senderName}`,
       html: layout('New Message', `
@@ -426,7 +442,7 @@ const sendBookingAcceptedEmail = async (email, details) => {
   if (!isEmailConfigured()) return;
   const { firstName, bookingNumber, eventDate, serviceName, providerName, totalAmount, checkoutUrl } = details;
   try {
-    await transporter.sendMail({
+    await getTransporter().sendMail({
       from: process.env.FROM_EMAIL, to: email,
       subject: `🎉 Booking Accepted — #${bookingNumber}`,
       html: layout('Booking Accepted', `
@@ -451,7 +467,7 @@ const sendBookingRejectedEmail = async (email, details) => {
   if (!isEmailConfigured()) return;
   const { firstName, bookingNumber, eventDate, serviceName, reason } = details;
   try {
-    await transporter.sendMail({
+    await getTransporter().sendMail({
       from: process.env.FROM_EMAIL, to: email,
       subject: `Booking Request Declined — #${bookingNumber}`,
       html: layout('Booking Declined', `
@@ -476,7 +492,7 @@ const sendServiceAddedEmail = async (email, details) => {
   if (!isEmailConfigured()) return;
   const { firstName, serviceName, serviceType, category, basePrice, serviceId } = details;
   try {
-    await transporter.sendMail({
+    await getTransporter().sendMail({
       from: process.env.FROM_EMAIL, to: email,
       subject: `✅ Your Service "${serviceName}" is Now Live!`,
       html: layout('Service Published', `
@@ -501,7 +517,7 @@ const sendProviderSuspensionEmail = async (email, details) => {
   if (!isEmailConfigured()) return;
   const { firstName, strikeCount, threshold } = details;
   try {
-    await transporter.sendMail({
+    await getTransporter().sendMail({
       from: process.env.FROM_EMAIL, to: email,
       subject: '⚠️ Your Event Compass Account Has Been Suspended',
       html: layout('Account Suspended', `
@@ -521,7 +537,7 @@ const sendProviderSuspensionEmail = async (email, details) => {
 const sendVerificationCodeEmail = async (email, firstName, code) => {
   if (!isEmailConfigured()) return;
   try {
-    await transporter.sendMail({
+    await getTransporter().sendMail({
       from: process.env.FROM_EMAIL, to: email,
       subject: `Your Event Compass Verification Code: ${code}`,
       html: layout('Verification Code', `

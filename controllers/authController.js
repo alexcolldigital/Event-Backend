@@ -87,8 +87,19 @@ const formatUser = (user) => ({
  * POST /api/auth/register
  */
 const registerUser = asyncHandler(async (req, res) => {
-  const { firstName, lastName, email, phoneNumber, country, countryCode, dialCode, password, passwordConfirm, role } =
-    req.body;
+  const {
+    firstName,
+    lastName,
+    email,
+    phoneNumber,
+    country,
+    countryCode,
+    dialCode,
+    password,
+    passwordConfirm,
+    role,
+    verificationMethod,
+  } = req.body;
 
   if (!firstName || !lastName || !email || !phoneNumber || !password) {
     return res.status(400).json({ success: false, message: 'All fields are required' });
@@ -116,23 +127,51 @@ const registerUser = asyncHandler(async (req, res) => {
     role: role || USER_ROLES.CLIENT,
   });
 
+  const method = verificationMethod === 'phone' ? 'phone' : 'email';
   const verificationToken = user.getEmailVerificationToken();
   await user.save();
 
-  sendEmailVerificationEmail(
-    email,
-    firstName,
-    `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`
-  ).catch((emailErr) => {
-    console.error('Verification email failed (non-fatal):', emailErr.message);
-  });
-
-  res.status(201).json({
+  let response = {
     success: true,
+    user: formatUser(user),
     message: 'User registered successfully. Please verify your email before logging in.',
     requiresEmailVerification: true,
-    user: formatUser(user),
-  });
+    verificationMethod: 'email',
+  };
+
+  if (method === 'phone') {
+    let otp = null;
+    try {
+      otp = await user.generatePhoneOtp();
+      await sendPhoneOtpSms(user.phoneNumber, otp);
+    } catch (phoneErr) {
+      console.error('Phone OTP send failed during registration:', phoneErr.message || phoneErr);
+    }
+
+    response = {
+      success: true,
+      user: formatUser(user),
+      token: generateToken(user._id, user.role),
+      refreshToken: generateRefreshToken(user._id),
+      message: 'Account created. Please verify your phone number to continue.',
+      requiresPhoneVerification: true,
+      verificationMethod: 'phone',
+    };
+
+    if (otp && process.env.NODE_ENV === 'development') {
+      response.otp = otp;
+    }
+  } else {
+    sendEmailVerificationEmail(
+      email,
+      firstName,
+      `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`
+    ).catch((emailErr) => {
+      console.error('Verification email failed (non-fatal):', emailErr.message);
+    });
+  }
+
+  res.status(201).json(response);
 });
 
 /**
@@ -154,6 +193,7 @@ const registerServiceProvider = asyncHandler(async (req, res) => {
     country,
     countryCode,
     dialCode,
+    verificationMethod,
   } = req.body;
 
   // Validate input
@@ -198,10 +238,36 @@ const registerServiceProvider = asyncHandler(async (req, res) => {
     address,
   });
 
-  await user.save();
-
+  const method = verificationMethod === 'phone' ? 'phone' : 'email';
   const verificationToken = user.getEmailVerificationToken();
   await user.save();
+
+  if (method === 'phone') {
+    let otp = null;
+    try {
+      otp = await user.generatePhoneOtp();
+      await sendPhoneOtpSms(user.phoneNumber, otp);
+    } catch (phoneErr) {
+      console.error('Phone OTP send failed during provider registration:', phoneErr.message || phoneErr);
+    }
+
+    const payload = {
+      success: true,
+      message: 'Service provider registered successfully. Please verify your phone number to continue.',
+      requiresPhoneVerification: true,
+      verificationMethod: 'phone',
+      token: generateToken(user._id, user.role),
+      refreshToken: generateRefreshToken(user._id),
+      user: formatUser(user),
+    };
+
+    if (otp && process.env.NODE_ENV === 'development') {
+      payload.otp = otp;
+    }
+
+    return res.status(201).json(payload);
+  }
+
   sendEmailVerificationEmail(
     email,
     firstName,
@@ -212,6 +278,7 @@ const registerServiceProvider = asyncHandler(async (req, res) => {
     success: true,
     message: 'Service provider registered successfully. Please verify your email before logging in.',
     requiresEmailVerification: true,
+    verificationMethod: 'email',
     user: formatUser(user),
   });
 });

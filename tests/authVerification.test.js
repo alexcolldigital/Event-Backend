@@ -76,4 +76,30 @@ describe('email verification gate', () => {
     expect(loginAfterVerify.body.success).toBe(true);
     expect(loginAfterVerify.body.token).toBeDefined();
   });
+
+  it('supports phone-based verification immediately after registration', async () => {
+    const email = `phone_verify_${Date.now()}_${Math.random().toString(36).slice(2)}@example.com`;
+    const password = 'Password123!';
+
+    const registerRes = await request(app)
+      .post('/api/auth/register')
+      .send({
+        firstName: 'Phone',
+        lastName: 'Verify',
+        email,
+        phoneNumber: `+234${String(Date.now()).slice(-9)}`,
+        country: 'Nigeria',
+        countryCode: 'NG',
+        dialCode: '+234',
+        password,
+        passwordConfirm: password,
+        verificationMethod: 'phone',
+      })
+      .expect(201);
+
+    expect(registerRes.body.success).toBe(true);
+    expect(registerRes.body.token).toBeDefined();
+    expect(registerRes.body.requiresPhoneVerification).toBe(true);
+    expect(registerRes.body.verificationMethod).toBe('phone');
+  });
 });
