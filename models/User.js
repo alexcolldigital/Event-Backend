@@ -32,6 +32,22 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: [true, 'Phone number is required'],
       unique: true,
+      trim: true,
+    },
+    country: {
+      type: String,
+      default: 'Nigeria',
+      trim: true,
+    },
+    countryCode: {
+      type: String,
+      default: 'NG',
+      trim: true,
+    },
+    dialCode: {
+      type: String,
+      default: '+234',
+      trim: true,
     },
     password: {
       type: String,

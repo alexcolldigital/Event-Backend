@@ -16,6 +16,7 @@ const {
   sendVerificationCodeEmail,
 } = require('../utils/email');
 const { USER_ROLES } = require('../config/constants');
+const { sendPhoneOtpSms } = require('../utils/sms');
 
 // Helper: extract request metadata
 const getRequestMeta = (req) => ({
@@ -27,9 +28,32 @@ const getRequestMeta = (req) => ({
 // Helper: detect suspicious login (new IP + new device)
 const isSuspiciousLogin = (user, ip, deviceId) => {
   if (!user.lastLoginIp) return false;
-  const knownDevice = deviceId && user.trustedDevices.some((d) => d.deviceId === deviceId);
+  const trustedDevices = Array.isArray(user.trustedDevices) ? user.trustedDevices : [];
+  const knownDevice = deviceId && trustedDevices.some((d) => d.deviceId === deviceId);
   const knownIp = user.lastLoginIp === ip;
   return !knownDevice && !knownIp;
+};
+
+const isNewDeviceLogin = (user, deviceId) => {
+  if (!deviceId) return false;
+  const trustedDevices = Array.isArray(user.trustedDevices) ? user.trustedDevices : [];
+  return !trustedDevices.some((d) => d.deviceId === deviceId);
+};
+
+const sendVerificationEmailToUser = async (user) => {
+  if (!user || !user.email) return null;
+  const verificationToken = user.getEmailVerificationToken();
+  await user.save();
+  try {
+    await sendEmailVerificationEmail(
+      user.email,
+      user.firstName,
+      `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`
+    );
+  } catch (emailErr) {
+    console.error('Verification email failed (non-fatal):', emailErr.message || emailErr);
+  }
+  return verificationToken;
 };
 
 const formatUser = (user) => ({
@@ -39,6 +63,9 @@ const formatUser = (user) => ({
   lastName: user.lastName,
   email: user.email,
   phoneNumber: user.phoneNumber,
+  country: user.country,
+  countryCode: user.countryCode,
+  dialCode: user.dialCode,
   role: user.role,
   businessName: user.businessName,
   businessType: user.businessType,
@@ -60,7 +87,7 @@ const formatUser = (user) => ({
  * POST /api/auth/register
  */
 const registerUser = asyncHandler(async (req, res) => {
-  const { firstName, lastName, email, phoneNumber, password, passwordConfirm, role } =
+  const { firstName, lastName, email, phoneNumber, country, countryCode, dialCode, password, passwordConfirm, role } =
     req.body;
 
   if (!firstName || !lastName || !email || !phoneNumber || !password) {
@@ -78,18 +105,23 @@ const registerUser = asyncHandler(async (req, res) => {
   }
 
   const user = new User({
-    firstName, lastName, email, phoneNumber, password,
+    firstName,
+    lastName,
+    email,
+    phoneNumber,
+    country: country || 'Nigeria',
+    countryCode: countryCode || 'NG',
+    dialCode: dialCode || '+234',
+    password,
     role: role || USER_ROLES.CLIENT,
   });
 
-  // Generate email verification token
   const verificationToken = user.getEmailVerificationToken();
   await user.save();
 
-  const token = generateToken(user._id, user.role);
-
   sendEmailVerificationEmail(
-    email, firstName,
+    email,
+    firstName,
     `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`
   ).catch((emailErr) => {
     console.error('Verification email failed (non-fatal):', emailErr.message);
@@ -97,8 +129,8 @@ const registerUser = asyncHandler(async (req, res) => {
 
   res.status(201).json({
     success: true,
-    message: 'User registered successfully. Please verify your email.',
-    token,
+    message: 'User registered successfully. Please verify your email before logging in.',
+    requiresEmailVerification: true,
     user: formatUser(user),
   });
 });
@@ -119,6 +151,9 @@ const registerServiceProvider = asyncHandler(async (req, res) => {
     businessType,
     businessDescription,
     address,
+    country,
+    countryCode,
+    dialCode,
   } = req.body;
 
   // Validate input
@@ -152,6 +187,9 @@ const registerServiceProvider = asyncHandler(async (req, res) => {
     lastName,
     email,
     phoneNumber,
+    country: country || 'Nigeria',
+    countryCode: countryCode || 'NG',
+    dialCode: dialCode || '+234',
     password,
     role: USER_ROLES.SERVICE_PROVIDER,
     businessName,
@@ -162,21 +200,18 @@ const registerServiceProvider = asyncHandler(async (req, res) => {
 
   await user.save();
 
-  // Send email verification
   const verificationToken = user.getEmailVerificationToken();
   await user.save();
   sendEmailVerificationEmail(
-    email, firstName,
+    email,
+    firstName,
     `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`
   ).catch(() => {});
 
-  // Generate token
-  const token = generateToken(user._id, user.role);
-
   res.status(201).json({
     success: true,
-    message: 'Service provider registered successfully. Please verify your email.',
-    token,
+    message: 'Service provider registered successfully. Please verify your email before logging in.',
+    requiresEmailVerification: true,
     user: formatUser(user),
   });
 });
@@ -201,6 +236,28 @@ const performLogin = async (user, req, res) => {
     return res.status(403).json({ success: false, message: `Account is blocked. Reason: ${user.blockReason}` });
   }
 
+  if (!user.isEmailVerified) {
+    await sendVerificationEmailToUser(user);
+    return res.status(403).json({
+      success: false,
+      message: 'Please verify your email before logging in.',
+      requiresEmailVerification: true,
+      userId: user._id,
+    });
+  }
+
+  if (isNewDeviceLogin(user, deviceId)) {
+    await sendVerificationEmailToUser(user);
+    return res.status(403).json({
+      success: false,
+      message: 'New device detected. A verification email has been sent to your inbox to confirm this device.',
+      requiresEmailVerification: true,
+      requiresDeviceVerification: true,
+      userId: user._id,
+      deviceId,
+    });
+  }
+
   // If 2FA enabled, send code and require verification
   if (user.twoFactorEnabled) {
     const code = await user.generateTwoFactorCode();
@@ -219,10 +276,21 @@ const performLogin = async (user, req, res) => {
   await user.resetFailedLogins();
   await user.addLoginHistory({ ip, userAgent, deviceId, success: true });
 
-  // Update trusted device last used
+  // Update trusted device last used, or add the device after successful verification
   if (deviceId) {
-    const device = user.trustedDevices.find((d) => d.deviceId === deviceId);
-    if (device) device.lastUsedAt = new Date();
+    const existingDevice = user.trustedDevices.find((d) => d.deviceId === deviceId);
+    if (existingDevice) {
+      existingDevice.lastUsedAt = new Date();
+    } else {
+      user.trustedDevices.push({
+        deviceId,
+        deviceName: 'Verified Device',
+        userAgent,
+        ip,
+        addedAt: new Date(),
+        lastUsedAt: new Date(),
+      });
+    }
     await user.save();
   }
 
@@ -595,10 +663,12 @@ const resetPassword = asyncHandler(async (req, res) => {
  * POST /api/auth/verify-email
  */
 const verifyEmail = asyncHandler(async (req, res) => {
-  const { token } = req.body;
+  const { token, deviceId, deviceName } = req.body;
+  const requestDeviceId = deviceId || req.headers['x-device-id'];
+  const requestDeviceName = deviceName || req.headers['x-device-name'] || 'Verified Device';
+
   if (!token) return res.status(400).json({ success: false, message: 'Token is required' });
 
-  // Verify email token (compare SHA-256 hash)
   const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
   const user = await User.findOne({
     emailVerificationToken: hashedToken,
@@ -608,12 +678,32 @@ const verifyEmail = asyncHandler(async (req, res) => {
   if (!user) return res.status(400).json({ success: false, message: 'Invalid or expired token' });
 
   user.isEmailVerified = true;
-  user.isVerified = true;
+  user.isVerified = user.isEmailVerified || user.isPhoneVerified || user.isBusinessVerified;
   user.emailVerificationToken = undefined;
   user.emailVerificationExpires = undefined;
+
+  if (requestDeviceId) {
+    const existingDevice = user.trustedDevices.find((d) => d.deviceId === requestDeviceId);
+    if (!existingDevice) {
+      user.trustedDevices.push({
+        deviceId: requestDeviceId,
+        deviceName: requestDeviceName,
+        userAgent: req.headers['user-agent'] || 'unknown',
+        ip: req.ip || req.connection?.remoteAddress || 'unknown',
+        addedAt: new Date(),
+        lastUsedAt: new Date(),
+      });
+    }
+  }
+
   await user.save();
 
-  res.status(200).json({ success: true, message: 'Email verified successfully' });
+  res.status(200).json({
+    success: true,
+    message: 'Email verified successfully',
+    isEmailVerified: true,
+    deviceAdded: Boolean(requestDeviceId),
+  });
 });
 
 /**
@@ -778,25 +868,35 @@ const sendPhoneOtp = asyncHandler(async (req, res) => {
 
   const otp = await user.generatePhoneOtp();
 
-  // Development: return OTP in response for testing
-  if (process.env.NODE_ENV === 'development') {
-    return res.status(200).json({
-      success: true,
-      message: `OTP sent to ${user.phoneNumber}`,
-      otp, // remove in production
-      phoneNumber: user.phoneNumber,
-    });
+  // Send OTP via Twilio SMS
+  try {
+    await sendPhoneOtpSms(user.phoneNumber, otp);
+  } catch (smsErr) {
+    // Twilio errors carry a numeric `code` and `moreInfo` URL
+    const twilioCode = smsErr.code;
+    const twilioMsg = smsErr.message || 'Unknown SMS error';
+    console.error(`[Twilio OTP error] Code: ${twilioCode} | ${twilioMsg}`);
+
+    if (process.env.NODE_ENV !== 'development') {
+      // Surface a user-friendly message for common Twilio error codes
+      let userMsg = 'Failed to send OTP. Please try again.';
+      if (twilioCode === 21211) userMsg = 'Invalid phone number. Please check and update your number.';
+      else if (twilioCode === 21614) userMsg = 'Phone number is not SMS-capable.';
+      else if (twilioCode === 21408) userMsg = 'SMS not permitted to this region.';
+      return res.status(500).json({ success: false, message: userMsg });
+    }
   }
 
-  // Production: send via SMS gateway (Termii, Twilio, etc.)
-  // TODO: await smsProvider.send(user.phoneNumber, `Your Event Compass verification code is: ${otp}`);
-  console.log(`[PHONE OTP] ${user.phoneNumber} => ${otp}`);
-
-  res.status(200).json({
+  const responsePayload = {
     success: true,
     message: `OTP sent to ${user.phoneNumber}. Enter it to verify your number.`,
     phoneNumber: user.phoneNumber,
-  });
+  };
+
+  // Expose OTP in dev for easy testing
+  if (process.env.NODE_ENV === 'development') responsePayload.otp = otp;
+
+  res.status(200).json(responsePayload);
 });
 
 /**
