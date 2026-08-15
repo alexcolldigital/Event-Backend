@@ -198,7 +198,7 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-device-id'],
 }));
 app.use(morgan('dev')); // Logging
 
