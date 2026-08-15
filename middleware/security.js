@@ -59,15 +59,20 @@ const globalApiLimiter = rateLimit({
 // ─── Input Sanitization ───────────────────────────────────────────────────────
 
 /**
- * Strip MongoDB operators from req.body, req.query, req.params
- * Prevents NoSQL injection
+ * Strip MongoDB operators from req.body and req.params only.
+ * req.query is intentionally excluded — Express 5 makes it a read-only getter
+ * and express-mongo-sanitize would throw "Cannot set property query" if included.
  */
-const sanitizeInputs = mongoSanitize({
-  replaceWith: '_',
-  onSanitize: ({ req, key }) => {
-    console.warn(`[SECURITY] NoSQL injection attempt blocked — key: ${key} IP: ${req.ip}`);
-  },
-});
+const sanitizeInputs = (req, res, next) => {
+  const sanitize = mongoSanitize.sanitize;
+  if (req.body && typeof req.body === 'object') {
+    req.body = sanitize(req.body, { replaceWith: '_' });
+  }
+  if (req.params && typeof req.params === 'object') {
+    req.params = sanitize(req.params, { replaceWith: '_' });
+  }
+  next();
+};
 
 /**
  * Strip dangerous HTML/script tags from string fields
