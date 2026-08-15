@@ -297,6 +297,24 @@ const performLogin = async (user, req, res) => {
   const token = generateToken(user._id, user.role);
   const refreshToken = generateRefreshToken(user._id);
 
+  // Phone not verified — issue token but prompt verification
+  if (!user.isPhoneVerified) {
+    try {
+      const otp = await user.generatePhoneOtp();
+      await sendPhoneOtpSms(user.phoneNumber, otp).catch(() => {});
+    } catch (e) { /* non-fatal */ }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Login successful. Please verify your phone number.',
+      token,
+      refreshToken,
+      user: formatUser(user),
+      suspicious,
+      requiresPhoneVerification: true,
+    });
+  }
+
   return res.status(200).json({
     success: true,
     message: 'Login successful',
@@ -925,11 +943,17 @@ const verifyPhone = asyncHandler(async (req, res) => {
   user.phoneOtpExpires = undefined;
   await user.save();
 
+  const token = generateToken(user._id, user.role);
+  const refreshToken = generateRefreshToken(user._id);
+
   res.status(200).json({
     success: true,
-    message: 'Phone number verified successfully. You can now log in with your phone number.',
+    message: 'Phone number verified successfully.',
     isPhoneVerified: true,
     isEmailVerified: user.isEmailVerified,
+    token,
+    refreshToken,
+    user: formatUser(user),
   });
 });
 
