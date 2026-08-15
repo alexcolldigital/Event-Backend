@@ -1,13 +1,19 @@
 /**
- * Email Utility — powered by Resend (HTTPS, works on Render)
+ * Email Utility — powered by Nodemailer (host SMTP)
  */
 
-const { Resend } = require('resend');
+const nodemailer = require('nodemailer');
 
 const isTruthy = (v) => ['1', 'true', 'yes', 'on'].includes(String(v || '').toLowerCase());
 
 const isEmailConfigured = () =>
-  Boolean(process.env.RESEND_API_KEY && !process.env.RESEND_API_KEY.includes('your_'));
+  Boolean(
+    process.env.SMTP_HOST &&
+    process.env.SMTP_USER &&
+    process.env.SMTP_PASS &&
+    !process.env.SMTP_USER.includes('your_') &&
+    !process.env.SMTP_PASS.includes('your_')
+  );
 
 const isEmailEnabled = () => {
   const flag = process.env.EMAILS_ENABLED ?? process.env.ENABLE_EMAILS;
@@ -15,12 +21,25 @@ const isEmailEnabled = () => {
   return isEmailConfigured();
 };
 
+const getTransporter = () =>
+  nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT || 465),
+    secure: Number(process.env.SMTP_PORT || 465) === 465,
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    },
+  });
+
 const sendMail = async ({ to, subject, html }) => {
   if (!isEmailEnabled()) return;
-  const resend = new Resend(process.env.RESEND_API_KEY);
-  const from = process.env.FROM_EMAIL || 'Event Compass <onboarding@resend.dev>';
-  const { error } = await resend.emails.send({ from, to, subject, html });
-  if (error) throw new Error(error.message);
+  await getTransporter().sendMail({
+    from: process.env.FROM_EMAIL,
+    to,
+    subject,
+    html,
+  });
 };
 
 // ─── Shared HTML layout ──────────────────────────────────────────────────────
