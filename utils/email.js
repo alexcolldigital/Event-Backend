@@ -44,6 +44,8 @@ const getTransporter = () => {
   return nodemailer.createTransport({
     host: smtp.host,
     port: smtp.port,
+    // Render instances may not have outbound IPv6 connectivity.
+    family: 4,
     secure: smtp.secure,
     requireTLS: smtp.requireTLS,
     auth: {
