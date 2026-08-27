@@ -689,11 +689,17 @@ const verifyEmail = asyncHandler(async (req, res) => {
 
   await user.save();
 
+  const jwtToken = generateToken(user._id, user.role);
+  const refreshToken = generateRefreshToken(user._id);
+
   res.status(200).json({
     success: true,
     message: 'Email verified successfully',
     isEmailVerified: true,
     deviceAdded: Boolean(requestDeviceId),
+    token: jwtToken,
+    refreshToken,
+    user: formatUser(user),
   });
 });
 
