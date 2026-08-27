@@ -5,6 +5,24 @@
 const nodemailer = require('nodemailer');
 
 const isTruthy = (v) => ['1', 'true', 'yes', 'on'].includes(String(v || '').toLowerCase());
+const isFalsey = (v) => ['0', 'false', 'no', 'off'].includes(String(v || '').toLowerCase());
+
+const getSmtpConfig = () => {
+  const port = Number(process.env.SMTP_PORT || 587);
+  const secure =
+    process.env.SMTP_SECURE !== undefined
+      ? isTruthy(process.env.SMTP_SECURE)
+      : port === 465;
+
+  return {
+    host: process.env.SMTP_HOST,
+    port,
+    secure,
+    requireTLS: !secure && !isFalsey(process.env.SMTP_REQUIRE_TLS),
+    user: process.env.SMTP_USER,
+    from: process.env.FROM_EMAIL || process.env.SMTP_USER,
+  };
+};
 
 const isEmailConfigured = () =>
   Boolean(
@@ -22,15 +40,14 @@ const isEmailEnabled = () => {
 };
 
 const getTransporter = () => {
-  const port = Number(process.env.SMTP_PORT || 587);
-  const secure = port === 465;
+  const smtp = getSmtpConfig();
   return nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port,
-    secure,
-    requireTLS: !secure,
+    host: smtp.host,
+    port: smtp.port,
+    secure: smtp.secure,
+    requireTLS: smtp.requireTLS,
     auth: {
-      user: process.env.SMTP_USER,
+      user: smtp.user,
       pass: process.env.SMTP_PASS,
     },
     tls: { rejectUnauthorized: false },
@@ -43,11 +60,35 @@ const getTransporter = () => {
 const sendMail = async ({ to, subject, html }) => {
   if (!isEmailEnabled()) return;
   await getTransporter().sendMail({
-    from: process.env.FROM_EMAIL,
+    from: process.env.FROM_EMAIL || process.env.SMTP_USER,
     to,
     subject,
     html,
   });
+};
+
+const getEmailStatus = () => {
+  const smtp = getSmtpConfig();
+  return {
+    enabled: isEmailEnabled(),
+    configured: isEmailConfigured(),
+    host: smtp.host || 'not set',
+    port: smtp.port,
+    secure: smtp.secure,
+    requireTLS: smtp.requireTLS,
+    user: smtp.user ? smtp.user.replace(/(.{2}).*(@.*)?$/, '$1***$2') : 'not set',
+    from: smtp.from || 'not set',
+  };
+};
+
+const verifyEmailTransport = async () => {
+  if (!isEmailEnabled()) return { ok: true, skipped: true, status: getEmailStatus() };
+  try {
+    await getTransporter().verify();
+    return { ok: true, status: getEmailStatus() };
+  } catch (error) {
+    return { ok: false, status: getEmailStatus(), error: error.message };
+  }
 };
 
 // ─── Shared HTML layout ──────────────────────────────────────────────────────
@@ -434,4 +475,6 @@ module.exports = {
   sendProviderSuspensionEmail,
   sendPromotionalEmail,
   sendNewMessageEmail,
+  getEmailStatus,
+  verifyEmailTransport,
 };

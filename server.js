@@ -29,6 +29,7 @@ const messageRoutes = require('./routes/messageRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const bookingController = require('./controllers/bookingController');
 const scheduler = require('./utils/scheduler');
+const { getEmailStatus, verifyEmailTransport } = require('./utils/email');
 
 // Initialize Express app + HTTP server + Socket.IO
 const app = express();
