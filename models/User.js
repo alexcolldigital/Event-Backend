@@ -236,10 +236,6 @@ const userSchema = new mongoose.Schema(
       },
     },
 
-    // Phone OTP Verification
-    phoneOtp: { type: String, select: false },
-    phoneOtpExpires: { type: Date, select: false },
-
     // Verification Tokens (stored as SHA-256 hashes)
     emailVerificationToken: String,
     emailVerificationExpires: Date,
@@ -329,25 +325,6 @@ userSchema.methods.getPasswordResetToken = function () {
   this.passwordResetToken = crypto.createHash('sha256').update(rawToken).digest('hex');
   this.passwordResetExpires = Date.now() + 60 * 60 * 1000; // 1 hour
   return rawToken;
-};
-
-/**
- * Generate 6-digit phone OTP
- */
-userSchema.methods.generatePhoneOtp = async function () {
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  this.phoneOtp = crypto.createHash('sha256').update(otp).digest('hex');
-  this.phoneOtpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 min
-  await this.save();
-  return otp;
-};
-
-/**
- * Verify phone OTP
- */
-userSchema.methods.verifyPhoneOtp = function (otp) {
-  const hashed = crypto.createHash('sha256').update(otp).digest('hex');
-  return this.phoneOtp === hashed && this.phoneOtpExpires > Date.now();
 };
 
 /**

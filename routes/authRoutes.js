@@ -193,24 +193,6 @@ router.post('/send-change-password-otp', authenticate, otpLimiter, authControlle
 // Get admin contacts (for messaging support)
 router.get('/admin-contacts', authenticate, authController.getAdminContacts);
 
-// Phone OTP verification (from profile)
-router.post(
-  '/send-phone-otp',
-  authenticate,
-  otpLimiter,
-  [body('phoneNumber').optional().isMobilePhone().withMessage('Valid phone number required')],
-  validateRequest,
-  authController.sendPhoneOtp
-);
-router.post(
-  '/verify-phone',
-  authenticate,
-  otpLimiter,
-  [body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits')],
-  validateRequest,
-  authController.verifyPhone
-);
-
 // Refresh access token
 router.post(
   '/refresh-token',

@@ -17,7 +17,6 @@ const {
   sendPasswordResetCodeEmail,
 } = require('../utils/email');
 const { USER_ROLES } = require('../config/constants');
-const { sendPhoneOtpSms } = require('../utils/sms');
 
 // Helper: extract request metadata
 const getRequestMeta = (req) => ({
@@ -839,106 +838,6 @@ const removeDevice = asyncHandler(async (req, res) => {
 });
 
 /**
- * Send phone OTP — works from profile to verify current phone number
- * Optionally accepts a new phoneNumber to update before sending OTP
- * POST /api/auth/send-phone-otp
- */
-const sendPhoneOtp = asyncHandler(async (req, res) => {
-  const { phoneNumber } = req.body; // optional: update phone before sending OTP
-
-  const user = await User.findById(req.userId);
-  if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-
-  // If a new phone number is provided, update it first
-  if (phoneNumber && phoneNumber !== user.phoneNumber) {
-    const existing = await User.findOne({ phoneNumber });
-    if (existing && existing._id.toString() !== req.userId) {
-      return res.status(400).json({ success: false, message: 'Phone number already in use by another account' });
-    }
-    user.phoneNumber = phoneNumber;
-    user.isPhoneVerified = false;
-    user.isVerified = false;
-    await user.save();
-  }
-
-  if (user.isPhoneVerified && !phoneNumber) {
-    return res.status(400).json({ success: false, message: 'Phone number is already verified' });
-  }
-
-  const otp = await user.generatePhoneOtp();
-
-  // Send OTP via Twilio SMS
-  try {
-    await sendPhoneOtpSms(user.phoneNumber, otp);
-  } catch (smsErr) {
-    // Twilio errors carry a numeric `code` and `moreInfo` URL
-    const twilioCode = smsErr.code;
-    const twilioMsg = smsErr.message || 'Unknown SMS error';
-    console.error(`[Twilio OTP error] Code: ${twilioCode} | ${twilioMsg}`);
-
-    if (process.env.NODE_ENV !== 'development') {
-      // Surface a user-friendly message for common Twilio error codes
-      let userMsg = 'Failed to send OTP. Please try again.';
-      if (twilioCode === 21211) userMsg = 'Invalid phone number. Please check and update your number.';
-      else if (twilioCode === 21614) userMsg = 'Phone number is not SMS-capable.';
-      else if (twilioCode === 21408) userMsg = 'SMS not permitted to this region.';
-      return res.status(500).json({ success: false, message: userMsg });
-    }
-  }
-
-  const responsePayload = {
-    success: true,
-    message: `OTP sent to ${user.phoneNumber}. Enter it to verify your number.`,
-    phoneNumber: user.phoneNumber,
-  };
-
-  // Expose OTP in dev for easy testing
-  if (process.env.NODE_ENV === 'development') responsePayload.otp = otp;
-
-  res.status(200).json(responsePayload);
-});
-
-/**
- * Verify phone OTP — called from profile screen
- * POST /api/auth/verify-phone
- */
-const verifyPhone = asyncHandler(async (req, res) => {
-  const { otp } = req.body;
-  if (!otp) return res.status(400).json({ success: false, message: 'OTP is required' });
-
-  const user = await User.findById(req.userId).select('+phoneOtp +phoneOtpExpires');
-  if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-
-  if (!user.phoneOtp || !user.phoneOtpExpires) {
-    return res.status(400).json({ success: false, message: 'No OTP found. Please request a new one.' });
-  }
-
-  if (!user.verifyPhoneOtp(otp)) {
-    return res.status(400).json({ success: false, message: 'Invalid or expired OTP. Please request a new one.' });
-  }
-
-  user.isPhoneVerified = true;
-  // isVerified = true when either email or phone is verified
-  user.isVerified = user.isEmailVerified || true;
-  user.phoneOtp = undefined;
-  user.phoneOtpExpires = undefined;
-  await user.save();
-
-  const token = generateToken(user._id, user.role);
-  const refreshToken = generateRefreshToken(user._id);
-
-  res.status(200).json({
-    success: true,
-    message: 'Phone number verified successfully.',
-    isPhoneVerified: true,
-    isEmailVerified: user.isEmailVerified,
-    token,
-    refreshToken,
-    user: formatUser(user),
-  });
-});
-
-/**
  * Refresh access token
  * POST /api/auth/refresh-token
  */
@@ -995,8 +894,6 @@ module.exports = {
   addDevice,
   removeDevice,
   getAdminContacts,
-  sendPhoneOtp,
-  verifyPhone,
   refreshAccessToken,
   sendChangePasswordOtp,
 };
