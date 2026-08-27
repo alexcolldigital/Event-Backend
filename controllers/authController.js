@@ -48,11 +48,13 @@ const sendOtpToUser = async (user) => {
   user.emailVerificationExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
   await user.save();
   try {
-    await sendVerificationCodeEmail(user.email, user.firstName, otp);
+    const sent = await sendVerificationCodeEmail(user.email, user.firstName, otp);
+    if (!sent) console.error('Verification code email was not sent: email delivery is disabled or not configured');
+    return sent;
   } catch (emailErr) {
     console.error('OTP email failed (non-fatal):', emailErr.message || emailErr);
+    return false;
   }
-  return otp;
 };
 
 const sendVerificationEmailToUser = async (user) => {
@@ -144,16 +146,8 @@ const registerUser = asyncHandler(async (req, res) => {
     role: role || USER_ROLES.CLIENT,
   });
 
-  const verificationToken = user.getEmailVerificationToken();
+  await sendOtpToUser(user);
   await user.save();
-
-  sendEmailVerificationEmail(
-    email,
-    firstName,
-    `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`
-  ).catch((emailErr) => {
-    console.error('Verification email failed (non-fatal):', emailErr.message);
-  });
 
   res.status(201).json({
     success: true,
@@ -226,13 +220,8 @@ const registerServiceProvider = asyncHandler(async (req, res) => {
     address,
   });
 
-  const verificationToken = user.getEmailVerificationToken();
+  await sendOtpToUser(user);
   await user.save();
-  sendEmailVerificationEmail(
-    email,
-    firstName,
-    `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`
-  ).catch(() => {});
 
   res.status(201).json({
     success: true,
@@ -268,6 +257,7 @@ const performLogin = async (user, req, res) => {
       success: false,
       message: 'Please verify your email before logging in.',
       requiresEmailVerification: true,
+      email: user.email,
       userId: user._id,
     });
   }
@@ -279,6 +269,7 @@ const performLogin = async (user, req, res) => {
       message: 'New device detected. A verification email has been sent to your inbox to confirm this device.',
       requiresEmailVerification: true,
       requiresDeviceVerification: true,
+      email: user.email,
       userId: user._id,
       deviceId,
     });

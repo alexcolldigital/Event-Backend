@@ -58,13 +58,14 @@ const getTransporter = () => {
 };
 
 const sendMail = async ({ to, subject, html }) => {
-  if (!isEmailEnabled()) return;
+  if (!isEmailEnabled()) return false;
   await getTransporter().sendMail({
     from: process.env.FROM_EMAIL || process.env.SMTP_USER,
     to,
     subject,
     html,
   });
+  return true;
 };
 
 const getEmailStatus = () => {
@@ -146,7 +147,7 @@ const sendWelcomeEmail = async (email, firstName, activationUrl) => {
 
 const sendVerificationCodeEmail = async (email, firstName, code) => {
   try {
-    await sendMail({
+    return await sendMail({
       to: email,
       subject: `Your Event Compass Verification Code: ${code}`,
       html: layout('Verification Code', `
@@ -158,7 +159,7 @@ const sendVerificationCodeEmail = async (email, firstName, code) => {
         <div class="alert aw">⏱️ This code expires in <strong>10 minutes</strong>. Do not share it with anyone.</div>
         <p>If you did not request this, please ignore this email.</p>`),
     });
-  } catch (e) { console.error('Verification code email error:', e.message); }
+  } catch (e) { console.error('Verification code email error:', e.message); return false; }
 };
 
 const sendTwoFactorEmail = async (email, firstName, code) => {
