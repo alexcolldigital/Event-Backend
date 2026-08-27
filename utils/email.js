@@ -121,10 +121,10 @@ const CSS = `
   .box tr{border-bottom:1px solid rgba(15,23,42,0.07)}
   .box tr:last-child{border-bottom:none}
   .box td{padding:9px 0;font-size:14px;vertical-align:top}
-  .box td:first-child{color:#64748b;font-weight:600;width:44%}
-  .box td:last-child{font-weight:800;color:#0f172a;text-align:right}
+  .box td:first-child{color:#64748b;font-weight:600;width:40%;word-break:break-word}
+  .box td:last-child{font-weight:800;color:#0f172a;text-align:right;word-break:break-word}
   .otp-wrap{text-align:center;margin:28px 0}
-  .otp-block{display:inline-block;background:#f5f7f2;border:2px solid #1f7a4d;border-radius:20px;padding:20px 40px;font-size:40px;font-weight:800;letter-spacing:14px;color:#1f7a4d}
+  .otp-block{display:inline-block;background:#f5f7f2;border:2px solid #1f7a4d;border-radius:20px;padding:16px 24px;font-size:32px;font-weight:800;letter-spacing:10px;color:#1f7a4d;max-width:100%}
   .btn{display:inline-block;background:#1f7a4d;color:#ffffff!important;padding:14px 28px;border-radius:18px;text-decoration:none;font-weight:800;font-size:15px;letter-spacing:0.1px;box-shadow:0 4px 16px rgba(31,122,77,0.22)}
   .btn-red{background:#dc2626!important;box-shadow:0 4px 16px rgba(220,38,38,0.22)!important}
   .btn-green{background:#1f7a4d!important}
@@ -135,7 +135,21 @@ const CSS = `
   hr{border:none;border-top:1px solid rgba(15,23,42,0.08);margin:22px 0}
   .ftr{background:#f5f7f2;padding:18px 32px;text-align:center;font-size:12px;color:#64748b;font-weight:600;border-top:1px solid rgba(15,23,42,0.08)}
   .ftr a{color:#1f7a4d;text-decoration:none;font-weight:700}
-  @media(max-width:600px){.hdr,.bdy,.ftr{padding-left:20px;padding-right:20px}.wrap{border-radius:20px}}
+  @media(max-width:600px){
+    .outer{padding:12px 8px 32px}
+    .hdr,.bdy,.ftr{padding-left:16px;padding-right:16px}
+    .hdr{padding-top:20px;padding-bottom:16px}
+    .hdr-title{font-size:18px}
+    .bdy{padding-top:20px;padding-bottom:20px}
+    .bdy p{font-size:14px}
+    .wrap{border-radius:16px}
+    .box{padding:12px 14px}
+    .box td{font-size:12px;padding:7px 0}
+    .box td:first-child{width:45%}
+    .otp-block{font-size:26px;letter-spacing:8px;padding:14px 16px}
+    .btn{padding:12px 20px;font-size:14px;display:block;text-align:center}
+    .alert{font-size:13px;padding:12px 14px}
+  }
 `;
 
 const layout = (title, body) => {
