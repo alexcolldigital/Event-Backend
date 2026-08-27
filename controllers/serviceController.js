@@ -141,7 +141,7 @@ const getServices = asyncHandler(async (req, res) => {
 const getServiceById = asyncHandler(async (req, res) => {
   const service = await Service.findById(req.params.id).populate(
     'provider',
-    'firstName lastName businessName profileImage averageRating totalReviews'
+    'firstName lastName businessName email phoneNumber role profileImage averageRating totalReviews'
   );
 
   if (!service) {

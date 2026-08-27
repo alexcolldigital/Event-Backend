@@ -739,23 +739,26 @@ const adminConfirmBooking = asyncHandler(async (req, res) => {
   // If admin provided prices for no-price services, recalculate totals
   if (adminSetPrices && adminSetPrices.length > 0) {
     booking.adminSetPrices = adminSetPrices;
-    const extraCost = adminSetPrices.reduce((sum, s) => sum + (Number(s.price) || 0), 0);
     const feeSetting = await PlatformSetting.findOne({ key: 'feePercentage' });
     const feeRate = feeSetting ? Number(feeSetting.value) / 100 : 0.10;
-    const newSubtotal = (booking.pricing.subtotal || 0) + extraCost;
+    // Use admin-set price as the new base subtotal (replaces original if service was priceOnRequest or 0)
+    const adminTotal = adminSetPrices.reduce((sum, s) => sum + (Number(s.price) || 0), 0);
+    const originalSubtotal = booking.pricing.subtotal || 0;
+    const newSubtotal = originalSubtotal === 0 ? adminTotal : originalSubtotal + adminTotal;
     const serviceAndDeliveryFee = newSubtotal * feeRate;
     const newTotal = newSubtotal + serviceAndDeliveryFee;
+    booking.pricing.basePrice = adminSetPrices[0]?.price || booking.pricing.basePrice;
     booking.pricing.subtotal = newSubtotal;
     booking.pricing.serviceAndDeliveryFee = serviceAndDeliveryFee;
     booking.pricing.totalAmount = newTotal;
     // Recalculate deposit/balance if split plan
     const { PAYMENT_PLAN } = require('../config/constants');
     if (booking.paymentPlan === PAYMENT_PLAN.SPLIT_50_50) {
-      booking.depositAmount = newTotal / 2;
-      booking.balanceDue = newTotal / 2;
+      booking.depositAmount = Math.round(newTotal * 0.5 * 100) / 100;
+      booking.balanceDue = Math.round(newTotal * 0.5 * 100) / 100;
     } else if (booking.paymentPlan === PAYMENT_PLAN.DEPOSIT_20) {
-      booking.depositAmount = newTotal * 0.2;
-      booking.balanceDue = newTotal * 0.8;
+      booking.depositAmount = Math.round(newTotal * 0.2 * 100) / 100;
+      booking.balanceDue = Math.round(newTotal * 0.8 * 100) / 100;
     } else {
       booking.depositAmount = newTotal;
       booking.balanceDue = 0;

@@ -95,41 +95,74 @@ const verifyEmailTransport = async () => {
 };
 
 // ─── Shared HTML layout ──────────────────────────────────────────────────────
-const layout = (title, body) => `<!DOCTYPE html>
+// Design mirrors the app UI:
+//   • Background #f5f7f2  — authStyles.screen
+//   • Card border-radius 28px, border rgba(15,23,42,.08), layered shadow — authStyles.card / BookingDetailScreen card
+//   • Hero banner #1f7a4d (HomeScreen / BookingDetailScreen hero)
+//   • Typography: #0f172a primary, #64748b muted, weight 800 headings / 600 body
+//   • Info box: left-border accent, #f5f7f2 bg, row dividers — BookingDetailScreen pricing card
+//   • Buttons: border-radius 18px, weight 800, green shadow — Button.jsx primary
+//   • Alert pills: match tagGreen / warning / danger tokens from BookingDetailScreen
+//   • OTP block: mirrors VerifyScreen otpBox style
+const CSS = `
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#f5f7f2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;color:#0f172a;-webkit-font-smoothing:antialiased}
+  .outer{padding:28px 16px 48px}
+  .wrap{max-width:580px;margin:0 auto;background:#ffffff;border-radius:28px;overflow:hidden;border:1px solid rgba(15,23,42,0.08);box-shadow:0 10px 15px -3px rgba(15,23,42,0.05),0 4px 6px -4px rgba(15,23,42,0.03)}
+  .hdr{background:#1f7a4d;padding:28px 32px 24px}
+  .hdr-eye{color:rgba(255,255,255,0.72);font-size:11px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;margin-bottom:6px}
+  .hdr-title{color:#ffffff;font-size:22px;font-weight:800;line-height:1.25;margin-bottom:4px}
+  .hdr-sub{color:rgba(255,255,255,0.75);font-size:13px;font-weight:600}
+  .bdy{padding:28px 32px}
+  .bdy p{line-height:1.75;margin-bottom:14px;font-size:15px;color:#0f172a;font-weight:500}
+  .bdy strong{color:#0f172a;font-weight:800}
+  .box{background:#f5f7f2;border-radius:20px;border:1px solid rgba(15,23,42,0.08);border-left:4px solid #1f7a4d;padding:18px 20px;margin:18px 0}
+  .box table{width:100%;border-collapse:collapse}
+  .box tr{border-bottom:1px solid rgba(15,23,42,0.07)}
+  .box tr:last-child{border-bottom:none}
+  .box td{padding:9px 0;font-size:14px;vertical-align:top}
+  .box td:first-child{color:#64748b;font-weight:600;width:44%}
+  .box td:last-child{font-weight:800;color:#0f172a;text-align:right}
+  .otp-wrap{text-align:center;margin:28px 0}
+  .otp-block{display:inline-block;background:#f5f7f2;border:2px solid #1f7a4d;border-radius:20px;padding:20px 40px;font-size:40px;font-weight:800;letter-spacing:14px;color:#1f7a4d}
+  .btn{display:inline-block;background:#1f7a4d;color:#ffffff!important;padding:14px 28px;border-radius:18px;text-decoration:none;font-weight:800;font-size:15px;letter-spacing:0.1px;box-shadow:0 4px 16px rgba(31,122,77,0.22)}
+  .btn-red{background:#dc2626!important;box-shadow:0 4px 16px rgba(220,38,38,0.22)!important}
+  .btn-green{background:#1f7a4d!important}
+  .alert{border-radius:16px;padding:14px 18px;margin:16px 0;font-size:14px;font-weight:600;line-height:1.6;border:1px solid}
+  .aw{background:#fff7ed;border-color:#fed7aa;color:#9a3412}
+  .ae{background:#fef2f2;border-color:#fecaca;color:#991b1b}
+  .as{background:#ecfdf3;border-color:#86efac;color:#15803d}
+  hr{border:none;border-top:1px solid rgba(15,23,42,0.08);margin:22px 0}
+  .ftr{background:#f5f7f2;padding:18px 32px;text-align:center;font-size:12px;color:#64748b;font-weight:600;border-top:1px solid rgba(15,23,42,0.08)}
+  .ftr a{color:#1f7a4d;text-decoration:none;font-weight:700}
+  @media(max-width:600px){.hdr,.bdy,.ftr{padding-left:20px;padding-right:20px}.wrap{border-radius:20px}}
+`;
+
+const layout = (title, body) => {
+  const year = new Date().getFullYear();
+  const appUrl = process.env.FRONTEND_URL || '#';
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>${title}</title>
-  <style>
-    body{margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;color:#333}
-    .wrap{max-width:600px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08)}
-    .hdr{background:linear-gradient(135deg,#16a34a,#15803d);padding:28px 40px;text-align:center}
-    .hdr h1{color:#fff;margin:0;font-size:22px;font-weight:700}
-    .bdy{padding:32px 40px}
-    .bdy p{line-height:1.7;margin:0 0 14px;font-size:15px}
-    .box{background:#f0fdf4;border-left:4px solid #16a34a;border-radius:6px;padding:16px 20px;margin:18px 0}
-    .box table{width:100%;border-collapse:collapse}
-    .box td{padding:5px 0;font-size:14px}
-    .box td:first-child{color:#666;width:45%}
-    .box td:last-child{font-weight:600;color:#1a1a2e}
-    .btn{display:inline-block;background:#16a34a;color:#fff!important;padding:12px 26px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;margin:6px 0}
-    .btn-red{background:#dc2626}.btn-green{background:#16a34a}
-    .alert{border-radius:8px;padding:13px 16px;margin:14px 0;font-size:14px}
-    .aw{background:#fef9c3;border:1px solid #fde047;color:#854d0e}
-    .ae{background:#fee2e2;border:1px solid #fca5a5;color:#991b1b}
-    .as{background:#dcfce7;border:1px solid #86efac;color:#166534}
-    .ftr{background:#f0fdf4;padding:18px 40px;text-align:center;font-size:12px;color:#888;border-top:1px solid #bbf7d0}
-    .ftr a{color:#16a34a;text-decoration:none}
-    hr{border:none;border-top:1px solid #bbf7d0;margin:22px 0}
-  </style>
+  <style>${CSS}</style>
 </head>
 <body>
+<div class="outer">
   <div class="wrap">
-    <div class="hdr"><h1>🧭 Event Compass</h1></div>
+    <div class="hdr">
+      <div class="hdr-eye">&#x1F9ED; Event Compass</div>
+      <div class="hdr-title">${title}</div>
+      <div class="hdr-sub">Book premium event services instantly</div>
+    </div>
     <div class="bdy">${body}</div>
-    <div class="ftr">&copy; ${new Date().getFullYear()} Event Compass &nbsp;|&nbsp;<a href="${process.env.FRONTEND_URL || '#'}">Platform</a> &nbsp;|&nbsp;<a href="mailto:support@eventcompass.com">Support</a></div>
+    <div class="ftr">&copy; ${year} Event Compass &nbsp;&bull;&nbsp; <a href="${appUrl}">Open App</a> &nbsp;&bull;&nbsp; <a href="mailto:support@eventcompass.com">Support</a></div>
   </div>
+</div>
 </body></html>`;
+};
 
 // ─── Email functions ──────────────────────────────────────────────────────────
 
@@ -152,13 +185,11 @@ const sendVerificationCodeEmail = async (email, firstName, code) => {
     return await sendMail({
       to: email,
       subject: `Your Event Compass Verification Code: ${code}`,
-      html: layout('Verification Code', `
+      html: layout('Verify Your Email', `
         <p>Hi <strong>${firstName}</strong>,</p>
         <p>Use the code below to verify your account:</p>
-        <div style="text-align:center;margin:28px 0">
-          <span style="display:inline-block;background:#f0fdf4;border:2px dashed #16a34a;border-radius:12px;padding:18px 40px;font-size:38px;font-weight:800;letter-spacing:12px;color:#16a34a">${code}</span>
-        </div>
-        <div class="alert aw">⏱️ This code expires in <strong>10 minutes</strong>. Do not share it with anyone.</div>
+        <div class="otp-wrap"><div class="otp-block">${code}</div></div>
+        <div class="alert aw">&#x23F1;&#xFE0F; This code expires in <strong>10 minutes</strong>. Do not share it with anyone.</div>
         <p>If you did not request this, please ignore this email.</p>`),
     });
   } catch (e) { console.error('Verification code email error:', e.message); return false; }
@@ -169,13 +200,11 @@ const sendTwoFactorEmail = async (email, firstName, code) => {
     await sendMail({
       to: email,
       subject: 'Your Login Verification Code - Event Compass',
-      html: layout('Login Code', `
+      html: layout('Confirm It\'s You', `
         <p>Hi <strong>${firstName}</strong>,</p>
         <p>Your two-factor authentication code is:</p>
-        <div style="text-align:center;margin:28px 0">
-          <span style="display:inline-block;background:#f0fdf4;border:2px dashed #16a34a;border-radius:12px;padding:18px 40px;font-size:38px;font-weight:800;letter-spacing:12px;color:#16a34a">${code}</span>
-        </div>
-        <div class="alert aw">⏱️ Expires in <strong>10 minutes</strong>. Do not share it.</div>
+        <div class="otp-wrap"><div class="otp-block">${code}</div></div>
+        <div class="alert aw">&#x23F1;&#xFE0F; Expires in <strong>10 minutes</strong>. Do not share it.</div>
         <p>If you didn't attempt to login, please change your password immediately.</p>`),
     });
   } catch (e) { console.error('2FA email error:', e.message); }
@@ -186,7 +215,7 @@ const sendEmailVerificationEmail = async (email, firstName, verificationUrl) => 
     await sendMail({
       to: email,
       subject: 'Verify Your Email - Event Compass',
-      html: layout('Verify Email', `
+      html: layout('Verify Your Email', `
         <p>Hi <strong>${firstName}</strong>,</p>
         <p>Please verify your email address to activate your account.</p>
         <p style="text-align:center"><a href="${verificationUrl}" class="btn">Verify Email</a></p>
@@ -216,9 +245,7 @@ const sendPasswordResetCodeEmail = async (email, firstName, code) => {
       html: layout('Reset Password', `
         <p>Hi <strong>${firstName}</strong>,</p>
         <p>Use the code below to reset your password:</p>
-        <div style="text-align:center;margin:28px 0">
-          <span style="display:inline-block;background:#f0fdf4;border:2px dashed #16a34a;border-radius:12px;padding:18px 40px;font-size:38px;font-weight:800;letter-spacing:12px;color:#16a34a">${code}</span>
-        </div>
+        <div class="otp-wrap"><div class="otp-block">${code}</div></div>
         <div class="alert aw">This code expires in <strong>10 minutes</strong>. Do not share it with anyone.</div>
         <p>If you did not request this, please ignore this email.</p>`),
     });
@@ -233,6 +260,7 @@ const sendApprovalEmail = async (email, providerName) => {
       html: layout('Account Approved', `
         <p>Hi <strong>${providerName}</strong>,</p>
         <p>Your service provider account has been approved. You can now list services and accept bookings.</p>
+        <div class="alert as">&#x2705; You are now verified on Event Compass.</div>
         <p style="text-align:center"><a href="${process.env.FRONTEND_URL || '#'}/dashboard" class="btn">Go to Dashboard</a></p>`),
     });
   } catch (e) { console.error('Approval email error:', e.message); }
@@ -286,7 +314,7 @@ const sendDepositPaidEmail = async (email, details) => {
           <tr><td>Balance Due</td><td>&#8358;${Number(balanceDue).toLocaleString()}</td></tr>
           <tr><td>Event Date</td><td>${new Date(eventDate).toDateString()}</td></tr>
         </table></div>
-        <div class="alert ae">⚠️ Complete the remaining balance before your event date to avoid cancellation.</div>`),
+        <div class="alert ae">&#x26A0;&#xFE0F; Complete the remaining balance before your event date to avoid cancellation.</div>`),
     });
   } catch (e) { console.error('Deposit paid email error:', e.message); }
 };
@@ -304,7 +332,7 @@ const sendBalanceDueReminderEmail = async (email, details) => {
           <tr><td>Balance Due</td><td>&#8358;${Number(balanceDue).toLocaleString()}</td></tr>
           <tr><td>Event Date</td><td>${new Date(eventDate).toDateString()}</td></tr>
         </table></div>
-        <div class="alert ae">⚠️ Please complete payment before the event date to avoid cancellation.</div>`),
+        <div class="alert ae">&#x26A0;&#xFE0F; Please complete payment before the event date to avoid cancellation.</div>`),
     });
   } catch (e) { console.error('Balance reminder email error:', e.message); }
 };
@@ -314,7 +342,7 @@ const sendBookingReminderEmail = async (email, details) => {
   try {
     await sendMail({
       to: email,
-      subject: `⏰ Reminder: Your Event is Tomorrow — Booking #${bookingNumber}`,
+      subject: `Reminder: Your Event is Tomorrow — Booking #${bookingNumber}`,
       html: layout('Booking Reminder', `
         <p>Hi <strong>${firstName}</strong>,</p>
         <p>Your upcoming event is <strong>tomorrow</strong>. Here are your details:</p>
@@ -324,7 +352,7 @@ const sendBookingReminderEmail = async (email, details) => {
           <tr><td>Date</td><td>${new Date(eventDate).toDateString()}</td></tr>
           ${eventTime ? `<tr><td>Time</td><td>${eventTime}</td></tr>` : ''}
         </table></div>
-        <div class="alert as">✅ Your booking is confirmed. Please ensure everything is ready!</div>
+        <div class="alert as">&#x2705; Your booking is confirmed. Please ensure everything is ready!</div>
         <p style="text-align:center"><a href="${process.env.FRONTEND_URL || '#'}/bookings" class="btn">View Booking</a></p>`),
     });
   } catch (e) { console.error('Booking reminder email error:', e.message); }
@@ -346,8 +374,8 @@ const sendCancellationAlertEmail = async (email, details) => {
           ${reason ? `<tr><td>Reason</td><td>${reason}</td></tr>` : ''}
         </table></div>
         ${refundEligible
-          ? '<div class="alert aw">💳 A refund has been initiated and will be processed within 3–5 business days.</div>'
-          : '<div class="alert ae">ℹ️ This booking was not eligible for a refund per the cancellation policy.</div>'}
+          ? '<div class="alert aw">&#x1F4B3; A refund has been initiated and will be processed within 3–5 business days.</div>'
+          : '<div class="alert ae">&#x2139;&#xFE0F; This booking was not eligible for a refund per the cancellation policy.</div>'}
         <p style="text-align:center"><a href="mailto:support@eventcompass.com" class="btn btn-red">Contact Support</a></p>`),
     });
   } catch (e) { console.error('Cancellation alert email error:', e.message); }
@@ -358,7 +386,7 @@ const sendBookingAcceptedEmail = async (email, details) => {
   try {
     await sendMail({
       to: email,
-      subject: `🎉 Booking Accepted — #${bookingNumber}`,
+      subject: `Booking Accepted — #${bookingNumber}`,
       html: layout('Booking Accepted', `
         <p>Hi <strong>${firstName}</strong>,</p>
         <p><strong>${providerName || 'Your service provider'}</strong> has accepted your booking.</p>
@@ -368,7 +396,7 @@ const sendBookingAcceptedEmail = async (email, details) => {
           <tr><td>Event Date</td><td>${new Date(eventDate).toDateString()}</td></tr>
           <tr><td>Total Amount</td><td>&#8358;${Number(totalAmount || 0).toLocaleString()}</td></tr>
         </table></div>
-        <div class="alert as">✅ Proceed to payment to secure your slot.</div>
+        <div class="alert as">&#x2705; Proceed to payment to secure your slot.</div>
         <p style="text-align:center"><a href="${checkoutUrl || (process.env.FRONTEND_URL || '#') + '/bookings'}" class="btn btn-green">Proceed to Payment</a></p>`),
     });
   } catch (e) { console.error('Booking accepted email error:', e.message); }
@@ -419,11 +447,11 @@ const sendProviderSuspensionEmail = async (email, details) => {
   try {
     await sendMail({
       to: email,
-      subject: '⚠️ Your Event Compass Account Has Been Suspended',
+      subject: 'Your Event Compass Account Has Been Suspended',
       html: layout('Account Suspended', `
         <p>Hi <strong>${firstName}</strong>,</p>
         <p>Your account has been suspended due to <strong>${strikeCount} cancellation strike(s)</strong> (threshold: ${threshold}).</p>
-        <div class="alert ae">🚫 You can no longer accept new bookings while suspended.</div>
+        <div class="alert ae">&#x1F6AB; You can no longer accept new bookings while suspended.</div>
         <p style="text-align:center"><a href="mailto:support@eventcompass.com" class="btn btn-red">Contact Support</a></p>`),
     });
   } catch (e) { console.error('Provider suspension email error:', e.message); }
@@ -434,7 +462,7 @@ const sendPromotionalEmail = async (email, details) => {
   try {
     await sendMail({
       to: email,
-      subject: `🎁 ${title} — Event Compass`,
+      subject: `${title} — Event Compass`,
       html: layout(title, `
         <p>Hi${firstName ? ` <strong>${firstName}</strong>` : ''},</p>
         <p>${message}</p>
@@ -448,11 +476,11 @@ const sendNewMessageEmail = async (email, details) => {
   try {
     await sendMail({
       to: email,
-      subject: `💬 New Message from ${senderName}`,
+      subject: `New Message from ${senderName}`,
       html: layout('New Message', `
         <p>Hi <strong>${firstName}</strong>,</p>
         <p>You have a new message from <strong>${senderName}</strong>:</p>
-        <div class="box"><p style="margin:0;font-style:italic;color:#555">&ldquo;${preview}&rdquo;</p></div>
+        <div class="box"><p style="margin:0;font-style:italic;color:#64748b">&ldquo;${preview}&rdquo;</p></div>
         <p style="text-align:center"><a href="${conversationUrl || (process.env.FRONTEND_URL || '#') + '/messages'}" class="btn">Reply Now</a></p>`),
     });
   } catch (e) { console.error('New message email error:', e.message); }
