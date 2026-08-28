@@ -260,6 +260,10 @@ const requireDatabase = async (req, res, next) => {
   });
 };
 
+// Public locations endpoint (no auth required)
+const { getLocations } = require('./controllers/adminExtendedController');
+app.get('/api/locations', requireDatabase, getLocations);
+
 // API Routes
 app.use('/api/auth', requireDatabase, authRoutes);
 app.use('/api/services', requireDatabase, serviceRoutes);

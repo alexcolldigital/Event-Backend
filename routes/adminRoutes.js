@@ -117,4 +117,10 @@ router.delete('/cms/:id', ext.deleteCMSPage);
 // Audit Logs
 router.get('/audit-logs', ext.getAuditLogs);
 
+// Location management
+router.get('/locations', ext.getLocations);
+router.post('/locations', ext.createLocation);
+router.put('/locations/:id', ext.updateLocation);
+router.delete('/locations/:id', ext.deleteLocation);
+
 module.exports = router;

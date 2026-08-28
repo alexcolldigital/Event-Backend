@@ -571,6 +571,7 @@ const getAuditLogs = asyncHandler(async (req, res) => {
 // ─── CANCELLATION POLICY ─────────────────────────────────────────────────────
 
 const { loadPolicy, loadStrikeThreshold } = require('../utils/cancellation');
+const Location = require('../models/Location');
 
 /**
  * GET /api/admin/cancellation-policy
@@ -641,6 +642,52 @@ const unsuspendProvider = asyncHandler(async (req, res) => {
   res.json({ success: true, message: 'Provider unsuspended', provider });
 });
 
+// ─── LOCATION MANAGEMENT ────────────────────────────────────────────────────
+
+/**
+ * GET /api/admin/locations  (also public: GET /api/locations)
+ * Returns all active locations (states + LGAs + towns)
+ */
+const getLocations = asyncHandler(async (req, res) => {
+  const locations = await Location.find({ isActive: true }).sort({ state: 1 });
+  res.json({ success: true, locations });
+});
+
+/**
+ * POST /api/admin/locations
+ * Body: { state, lgas: [{ lga, towns: [] }] }
+ */
+const createLocation = asyncHandler(async (req, res) => {
+  const { state, lgas = [] } = req.body;
+  if (!state) return res.status(400).json({ success: false, message: 'state is required' });
+  const existing = await Location.findOne({ state });
+  if (existing) return res.status(409).json({ success: false, message: 'State already exists' });
+  const location = await Location.create({ state, lgas });
+  await logAudit(req, 'CREATE_LOCATION', 'Location', location._id, { state });
+  res.status(201).json({ success: true, message: 'Location created', location });
+});
+
+/**
+ * PUT /api/admin/locations/:id
+ * Full replace of lgas array, or add new LGAs/towns
+ */
+const updateLocation = asyncHandler(async (req, res) => {
+  const location = await Location.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+  if (!location) return res.status(404).json({ success: false, message: 'Location not found' });
+  await logAudit(req, 'UPDATE_LOCATION', 'Location', location._id, req.body);
+  res.json({ success: true, message: 'Location updated', location });
+});
+
+/**
+ * DELETE /api/admin/locations/:id
+ */
+const deleteLocation = asyncHandler(async (req, res) => {
+  const location = await Location.findByIdAndDelete(req.params.id);
+  if (!location) return res.status(404).json({ success: false, message: 'Location not found' });
+  await logAudit(req, 'DELETE_LOCATION', 'Location', req.params.id, {});
+  res.json({ success: true, message: 'Location deleted' });
+});
+
 module.exports = {
   // Commission
   getCommissionSettings,
@@ -698,4 +745,9 @@ module.exports = {
   getProviderStrikes,
   resetProviderStrikes,
   unsuspendProvider,
+  // Locations
+  getLocations,
+  createLocation,
+  updateLocation,
+  deleteLocation,
 };
