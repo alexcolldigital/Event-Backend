@@ -11,6 +11,7 @@ const buildCartCheckoutPayloads = ({ userId, bookingDetails = {}, cartItems = []
     eventEndDate: bookingDetails.eventEndDate,
     eventTime: bookingDetails.eventTime,
     duration: bookingDetails.duration,
+    paymentPlan: bookingDetails.paymentPlan,
     numberOfGuests: item.quantity || bookingDetails.numberOfGuests || 1,
     specialRequirements: item.specialRequirements || bookingDetails.specialRequirements || '',
     clientNotes: bookingDetails.clientNotes || '',

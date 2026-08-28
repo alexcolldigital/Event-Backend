@@ -192,7 +192,7 @@ const checkoutCart = asyncHandler(async (req, res) => {
   const checkoutLinks = [];
 
   for (const payload of payloads) {
-    const { serviceId, venueId, eventId, eventDate, eventEndDate, eventTime, duration, numberOfGuests, specialRequirements, clientNotes, bookingLocation } = payload;
+    const { serviceId, venueId, eventId, eventDate, eventEndDate, eventTime, duration, numberOfGuests, specialRequirements, clientNotes, bookingLocation, paymentPlan } = payload;
 
     if (!eventDate || (!serviceId && !venueId)) {
       continue;
@@ -250,6 +250,23 @@ const checkoutCart = asyncHandler(async (req, res) => {
     const serviceAndDeliveryFeeCheckout = checkoutSubtotal * feeRateCheckout;
     const totalAmount = checkoutSubtotal + serviceAndDeliveryFeeCheckout;
 
+    const selectedPlan = paymentPlan || PAYMENT_PLAN.FULL;
+    let depositAmount = 0;
+    let balanceDue = 0;
+    if (selectedPlan === PAYMENT_PLAN.SPLIT_50_50) {
+      depositAmount = Math.round(totalAmount * 0.5 * 100) / 100;
+      balanceDue = Math.round((totalAmount - depositAmount) * 100) / 100;
+    } else if (selectedPlan === PAYMENT_PLAN.DEPOSIT_20) {
+      depositAmount = Math.round(totalAmount * 0.2 * 100) / 100;
+      balanceDue = Math.round((totalAmount - depositAmount) * 100) / 100;
+    } else {
+      depositAmount = totalAmount;
+    }
+
+    const balanceDeadline = selectedPlan !== PAYMENT_PLAN.FULL
+      ? new Date(new Date(eventDate).getTime() - 2 * 24 * 60 * 60 * 1000)
+      : null;
+
     const bookingNumber = `EC-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 
     const booking = new Booking({
@@ -273,6 +290,10 @@ const checkoutCart = asyncHandler(async (req, res) => {
         serviceAndDeliveryFee: serviceAndDeliveryFeeCheckout,
         totalAmount,
       },
+      paymentPlan: selectedPlan,
+      depositAmount,
+      balanceDue,
+      balanceDeadline,
       status: BOOKING_STATUS.PENDING,
     });
 

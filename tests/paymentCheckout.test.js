@@ -1,4 +1,5 @@
 const { buildCheckoutSessionPayload } = require('../utils/payment');
+const { buildCartCheckoutPayloads } = require('../utils/cartCheckout');
 
 describe('Payment checkout payload', () => {
   it('builds a gateway checkout descriptor for a booking', () => {
@@ -22,5 +23,15 @@ describe('Payment checkout payload', () => {
     expect(payload.bookingNumber).toBe('EC-123');
     expect(payload.successUrl).toBe('http://localhost:3000/bookings/payment-result?bookingId=booking-123&status=success');
     expect(payload.cancelUrl).toBe('http://localhost:3000/bookings/payment-result?bookingId=booking-123&status=cancelled');
+  });
+
+  it.each(['deposit_20', 'split_50_50'])('preserves the %s cart payment plan', (paymentPlan) => {
+    const [payload] = buildCartCheckoutPayloads({
+      userId: 'client-123',
+      bookingDetails: { eventDate: '2026-09-04', paymentPlan },
+      cartItems: [{ serviceId: 'service-123', quantity: 1 }],
+    });
+
+    expect(payload.paymentPlan).toBe(paymentPlan);
   });
 });
