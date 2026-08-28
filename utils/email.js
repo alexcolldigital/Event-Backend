@@ -109,8 +109,10 @@ const CSS = `
   body{background:#f5f7f2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;color:#0f172a;-webkit-font-smoothing:antialiased}
   .outer{padding:28px 16px 48px}
   .wrap{max-width:580px;margin:0 auto;background:#ffffff;border-radius:28px;overflow:hidden;border:1px solid rgba(15,23,42,0.08);box-shadow:0 10px 15px -3px rgba(15,23,42,0.05),0 4px 6px -4px rgba(15,23,42,0.03)}
-  .hdr{background:#1f7a4d;padding:28px 32px 24px}
-  .hdr-eye{color:rgba(255,255,255,0.72);font-size:11px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;margin-bottom:6px}
+  .hdr{background:#1f7a4d;padding:24px 32px 20px}
+  .hdr-logo{display:block;margin-bottom:14px}
+  .hdr-logo img{height:40px;width:auto;max-width:160px;display:block}
+  .hdr-logo-text{display:inline-block;color:#ffffff;font-size:20px;font-weight:800;letter-spacing:-0.3px}
   .hdr-title{color:#ffffff;font-size:22px;font-weight:800;line-height:1.25;margin-bottom:4px}
   .hdr-sub{color:rgba(255,255,255,0.75);font-size:13px;font-weight:600}
   .bdy{padding:28px 32px}
@@ -138,7 +140,8 @@ const CSS = `
   @media(max-width:600px){
     .outer{padding:12px 8px 32px}
     .hdr,.bdy,.ftr{padding-left:16px;padding-right:16px}
-    .hdr{padding-top:20px;padding-bottom:16px}
+    .hdr{padding-top:18px;padding-bottom:14px}
+    .hdr-logo img{height:32px}
     .hdr-title{font-size:18px}
     .bdy{padding-top:20px;padding-bottom:20px}
     .bdy p{font-size:14px}
@@ -155,6 +158,10 @@ const CSS = `
 const layout = (title, body) => {
   const year = new Date().getFullYear();
   const appUrl = process.env.FRONTEND_URL || '#';
+  const logoUrl = process.env.LOGO_URL || `${appUrl}/assets/icon.png`;
+  const logoHtml = `<a href="${appUrl}" class="hdr-logo" style="text-decoration:none">
+      <img src="${logoUrl}" alt="Event Compass" width="160" height="40" style="height:40px;width:auto;max-width:160px;display:block" />
+    </a>`;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -167,7 +174,7 @@ const layout = (title, body) => {
 <div class="outer">
   <div class="wrap">
     <div class="hdr">
-      <div class="hdr-eye">&#x1F9ED; Event Compass</div>
+      ${logoHtml}
       <div class="hdr-title">${title}</div>
       <div class="hdr-sub">Book premium event services instantly</div>
     </div>
@@ -203,7 +210,7 @@ const sendVerificationCodeEmail = async (email, firstName, code) => {
         <p>Hi <strong>${firstName}</strong>,</p>
         <p>Use the code below to verify your account:</p>
         <div class="otp-wrap"><div class="otp-block">${code}</div></div>
-        <div class="alert aw">&#x23F1;&#xFE0F; This code expires in <strong>10 minutes</strong>. Do not share it with anyone.</div>
+        <div class="alert aw">This code expires in <strong>10 minutes</strong>. Do not share it with anyone.</div>
         <p>If you did not request this, please ignore this email.</p>`),
     });
   } catch (e) { console.error('Verification code email error:', e.message); return false; }
@@ -218,7 +225,7 @@ const sendTwoFactorEmail = async (email, firstName, code) => {
         <p>Hi <strong>${firstName}</strong>,</p>
         <p>Your two-factor authentication code is:</p>
         <div class="otp-wrap"><div class="otp-block">${code}</div></div>
-        <div class="alert aw">&#x23F1;&#xFE0F; Expires in <strong>10 minutes</strong>. Do not share it.</div>
+        <div class="alert aw">Expires in <strong>10 minutes</strong>. Do not share it.</div>
         <p>If you didn't attempt to login, please change your password immediately.</p>`),
     });
   } catch (e) { console.error('2FA email error:', e.message); }
@@ -274,7 +281,7 @@ const sendApprovalEmail = async (email, providerName) => {
       html: layout('Account Approved', `
         <p>Hi <strong>${providerName}</strong>,</p>
         <p>Your service provider account has been approved. You can now list services and accept bookings.</p>
-        <div class="alert as">&#x2705; You are now verified on Event Compass.</div>
+        <div class="alert as">You are now verified on Event Compass.</div>
         <p style="text-align:center"><a href="${process.env.FRONTEND_URL || '#'}/dashboard" class="btn">Go to Dashboard</a></p>`),
     });
   } catch (e) { console.error('Approval email error:', e.message); }
@@ -328,7 +335,7 @@ const sendDepositPaidEmail = async (email, details) => {
           <tr><td>Balance Due</td><td>&#8358;${Number(balanceDue).toLocaleString()}</td></tr>
           <tr><td>Event Date</td><td>${new Date(eventDate).toDateString()}</td></tr>
         </table></div>
-        <div class="alert ae">&#x26A0;&#xFE0F; Complete the remaining balance before your event date to avoid cancellation.</div>`),
+        <div class="alert ae">Complete the remaining balance before your event date to avoid cancellation.</div>`),
     });
   } catch (e) { console.error('Deposit paid email error:', e.message); }
 };
@@ -346,7 +353,7 @@ const sendBalanceDueReminderEmail = async (email, details) => {
           <tr><td>Balance Due</td><td>&#8358;${Number(balanceDue).toLocaleString()}</td></tr>
           <tr><td>Event Date</td><td>${new Date(eventDate).toDateString()}</td></tr>
         </table></div>
-        <div class="alert ae">&#x26A0;&#xFE0F; Please complete payment before the event date to avoid cancellation.</div>`),
+        <div class="alert ae">Please complete payment before the event date to avoid cancellation.</div>`),
     });
   } catch (e) { console.error('Balance reminder email error:', e.message); }
 };
@@ -366,7 +373,7 @@ const sendBookingReminderEmail = async (email, details) => {
           <tr><td>Date</td><td>${new Date(eventDate).toDateString()}</td></tr>
           ${eventTime ? `<tr><td>Time</td><td>${eventTime}</td></tr>` : ''}
         </table></div>
-        <div class="alert as">&#x2705; Your booking is confirmed. Please ensure everything is ready!</div>
+        <div class="alert as">Your booking is confirmed. Please ensure everything is ready!</div>
         <p style="text-align:center"><a href="${process.env.FRONTEND_URL || '#'}/bookings" class="btn">View Booking</a></p>`),
     });
   } catch (e) { console.error('Booking reminder email error:', e.message); }
@@ -388,8 +395,8 @@ const sendCancellationAlertEmail = async (email, details) => {
           ${reason ? `<tr><td>Reason</td><td>${reason}</td></tr>` : ''}
         </table></div>
         ${refundEligible
-          ? '<div class="alert aw">&#x1F4B3; A refund has been initiated and will be processed within 3–5 business days.</div>'
-          : '<div class="alert ae">&#x2139;&#xFE0F; This booking was not eligible for a refund per the cancellation policy.</div>'}
+          ? '<div class="alert aw">A refund has been initiated and will be processed within 3–5 business days.</div>'
+          : '<div class="alert ae">This booking was not eligible for a refund per the cancellation policy.</div>'}
         <p style="text-align:center"><a href="mailto:support@eventcompass.com" class="btn btn-red">Contact Support</a></p>`),
     });
   } catch (e) { console.error('Cancellation alert email error:', e.message); }
@@ -410,7 +417,7 @@ const sendBookingAcceptedEmail = async (email, details) => {
           <tr><td>Event Date</td><td>${new Date(eventDate).toDateString()}</td></tr>
           <tr><td>Total Amount</td><td>&#8358;${Number(totalAmount || 0).toLocaleString()}</td></tr>
         </table></div>
-        <div class="alert as">&#x2705; Proceed to payment to secure your slot.</div>
+        <div class="alert as">Proceed to payment to secure your slot.</div>
         <p style="text-align:center"><a href="${checkoutUrl || (process.env.FRONTEND_URL || '#') + '/bookings'}" class="btn btn-green">Proceed to Payment</a></p>`),
     });
   } catch (e) { console.error('Booking accepted email error:', e.message); }
@@ -465,7 +472,7 @@ const sendProviderSuspensionEmail = async (email, details) => {
       html: layout('Account Suspended', `
         <p>Hi <strong>${firstName}</strong>,</p>
         <p>Your account has been suspended due to <strong>${strikeCount} cancellation strike(s)</strong> (threshold: ${threshold}).</p>
-        <div class="alert ae">&#x1F6AB; You can no longer accept new bookings while suspended.</div>
+        <div class="alert ae">You can no longer accept new bookings while suspended.</div>
         <p style="text-align:center"><a href="mailto:support@eventcompass.com" class="btn btn-red">Contact Support</a></p>`),
     });
   } catch (e) { console.error('Provider suspension email error:', e.message); }
