@@ -7,7 +7,7 @@ const Booking = require('../models/Booking');
 const Payment = require('../models/Payment');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { BOOKING_STATUS, PAYMENT_STATUS, PAYMENT_PLAN, RESCHEDULE_STATUS, REFUND_STATUS } = require('../config/constants');
-const { sendBookingConfirmationEmail, sendDepositPaidEmail, sendBalanceDueReminderEmail, sendCancellationAlertEmail, sendBookingAcceptedEmail, sendBookingRejectedEmail, sendProviderSuspensionEmail } = require('../utils/email');
+const { sendBookingConfirmationEmail, sendDepositPaidEmail, sendBalanceDueReminderEmail, sendCancellationAlertEmail, sendBookingAcceptedEmail, sendBookingRejectedEmail, sendProviderSuspensionEmail, sendNewBookingAlertEmail, sendPaymentReceivedEmail, sendFullPaymentConfirmationEmail } = require('../utils/email');
 const { calcClientRefund, applyProviderStrike, loadStrikeThreshold } = require('../utils/cancellation');
 const { isBookingWithinCoverage } = require('../utils/locationMatcher');
 const { buildCartCheckoutPayloads } = require('../utils/cartCheckout');
@@ -168,6 +168,71 @@ const createBooking = asyncHandler(async (req, res) => {
   await booking.save();
   booking = await booking.populate('client serviceProvider service venue');
 
+  // Notify client (submission confirmation) + provider/admin (new booking alert)
+  try {
+    const User = require('../models/User');
+    const [client, provider] = await Promise.all([
+      User.findById(req.userId),
+      User.findById(serviceProvider),
+    ]);
+    const svcName = booking.service?.name || booking.venue?.name || 'N/A';
+    const clientName = client ? `${client.firstName} ${client.lastName}` : 'Client';
+    const planLabel = selectedPlan === PAYMENT_PLAN.DEPOSIT_20 ? '20% Deposit' : selectedPlan === PAYMENT_PLAN.SPLIT_50_50 ? '50/50 Split' : 'Full Payment';
+
+    // Client: booking submitted confirmation
+    if (client) {
+      push.notifyBookingUpdate(client, { ...booking.toObject(), status: 'submitted' });
+      await inApp.create(client._id, { title: 'Booking Submitted ✅', message: `Your booking #${booking.bookingNumber} for ${svcName} has been submitted. Awaiting provider confirmation.`, notifType: 'booking_update', relatedId: booking._id });
+      if (client.email) {
+        await sendBookingConfirmationEmail(client.email, {
+          bookingNumber: booking.bookingNumber,
+          eventDate: booking.eventDate,
+          totalAmount: booking.pricing.totalAmount,
+          status: 'Pending Provider Confirmation',
+        });
+      }
+    }
+
+    // Provider: new booking alert
+    if (provider) {
+      push.notifyNewBooking(provider, booking);
+      await inApp.create(provider._id, { title: 'New Booking Request 📋', message: `New booking #${booking.bookingNumber} from ${clientName} for ${svcName} on ${new Date(eventDate).toDateString()}.`, notifType: 'new_booking', relatedId: booking._id });
+      if (provider.email) {
+        await sendNewBookingAlertEmail(provider.email, {
+          firstName: provider.firstName,
+          bookingNumber: booking.bookingNumber,
+          clientName,
+          eventDate: booking.eventDate,
+          serviceName: svcName,
+          totalAmount: booking.pricing.totalAmount,
+          paymentPlan: selectedPlan,
+          depositAmount: booking.depositAmount,
+          balanceDue: booking.balanceDue,
+        });
+      }
+    }
+
+    // Admin: new booking alert
+    const admins = await User.find({ role: 'admin', isActive: true }).select('_id firstName email fcmToken preferences');
+    for (const admin of admins) {
+      push.notifyNewBooking(admin, booking);
+      await inApp.create(admin._id, { title: 'New Booking 📋', message: `Booking #${booking.bookingNumber} submitted by ${clientName} for ${svcName}.`, notifType: 'new_booking', relatedId: booking._id });
+      if (admin.email) {
+        await sendNewBookingAlertEmail(admin.email, {
+          firstName: admin.firstName,
+          bookingNumber: booking.bookingNumber,
+          clientName,
+          eventDate: booking.eventDate,
+          serviceName: svcName,
+          totalAmount: booking.pricing.totalAmount,
+          paymentPlan: selectedPlan,
+          depositAmount: booking.depositAmount,
+          balanceDue: booking.balanceDue,
+        });
+      }
+    }
+  } catch (_) {}
+
   res.status(201).json({
     success: true,
     message: 'Booking created successfully. Awaiting provider confirmation before payment.',
@@ -301,7 +366,31 @@ const checkoutCart = asyncHandler(async (req, res) => {
     const populatedBooking = await booking.populate('client serviceProvider service venue');
     createdBookings.push(populatedBooking);
 
-    // No checkout URL at booking creation — payment only unlocks after provider confirms
+    // Notify client + provider/admin for each cart booking
+    try {
+      const User = require('../models/User');
+      const [cartClient, cartProvider] = await Promise.all([
+        User.findById(req.userId),
+        User.findById(serviceProvider),
+      ]);
+      const cartSvcName = populatedBooking.service?.name || populatedBooking.venue?.name || 'N/A';
+      const cartClientName = cartClient ? `${cartClient.firstName} ${cartClient.lastName}` : 'Client';
+
+      if (cartClient) {
+        push.notifyBookingUpdate(cartClient, { ...populatedBooking.toObject(), status: 'submitted' });
+        await inApp.create(cartClient._id, { title: 'Booking Submitted ✅', message: `Booking #${booking.bookingNumber} for ${cartSvcName} submitted. Awaiting provider confirmation.`, notifType: 'booking_update', relatedId: booking._id });
+        if (cartClient.email) {
+          await sendBookingConfirmationEmail(cartClient.email, { bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, totalAmount: booking.pricing.totalAmount, status: 'Pending Provider Confirmation' });
+        }
+      }
+      if (cartProvider) {
+        push.notifyNewBooking(cartProvider, booking);
+        await inApp.create(cartProvider._id, { title: 'New Booking Request 📋', message: `New booking #${booking.bookingNumber} from ${cartClientName} for ${cartSvcName}.`, notifType: 'new_booking', relatedId: booking._id });
+        if (cartProvider.email) {
+          await sendNewBookingAlertEmail(cartProvider.email, { firstName: cartProvider.firstName, bookingNumber: booking.bookingNumber, clientName: cartClientName, eventDate: booking.eventDate, serviceName: cartSvcName, totalAmount: booking.pricing.totalAmount, paymentPlan: selectedPlan, depositAmount: booking.depositAmount, balanceDue: booking.balanceDue });
+        }
+      }
+    } catch (_) {}
   }
 
   res.status(201).json({
@@ -456,17 +545,21 @@ const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
 
     // Notify deposit paid
     try {
+      const User = require('../models/User');
       const client = booking.client;
+      const provider = await User.findById(booking.serviceProvider);
       push.notifyDepositPaid(client, booking);
       await inApp.create(client._id || client, { title: 'Deposit Confirmed', message: `Deposit for booking #${booking.bookingNumber} received. Balance due: ₦${Number(booking.balanceDue).toLocaleString()}.`, notifType: 'deposit_paid', relatedId: booking._id });
       if (client.email) {
-        await sendDepositPaidEmail(client.email, {
-          bookingNumber: booking.bookingNumber,
-          depositAmount: booking.depositAmount,
-          balanceDue: booking.balanceDue,
-          eventDate: booking.eventDate,
-          paymentPlan: booking.paymentPlan,
-        });
+        await sendDepositPaidEmail(client.email, { bookingNumber: booking.bookingNumber, depositAmount: booking.depositAmount, balanceDue: booking.balanceDue, eventDate: booking.eventDate, paymentPlan: booking.paymentPlan });
+      }
+      if (provider) {
+        push.notifyPaymentReceived(provider, booking, 'deposit', booking.depositAmount);
+        await inApp.create(provider._id, { title: 'Deposit Received 💰', message: `Deposit of ₦${Number(booking.depositAmount).toLocaleString()} received for booking #${booking.bookingNumber}. Balance due: ₦${Number(booking.balanceDue).toLocaleString()}.`, notifType: 'payment_confirmation', relatedId: booking._id });
+        if (provider.email) {
+          const clientName = `${client.firstName} ${client.lastName}`;
+          await sendPaymentReceivedEmail(provider.email, { firstName: provider.firstName, bookingNumber: booking.bookingNumber, clientName, paymentType: 'deposit', amount: booking.depositAmount, totalAmount: booking.pricing.totalAmount, balanceDue: booking.balanceDue, eventDate: booking.eventDate });
+        }
       }
     } catch (_) {}
 
@@ -481,16 +574,22 @@ const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
     await _upsertPaymentRecord(booking, booking.payment.transactionId, booking.balanceDue, 'balance');
 
     try {
+      const User = require('../models/User');
       const client = booking.client;
+      const provider = await User.findById(booking.serviceProvider);
+      const svc = await require('../models/Service').findById(booking.service).select('name').catch(() => null);
       push.notifyPaymentConfirmation(client, booking);
-      await inApp.create(client._id || client, { title: 'Payment Confirmed', message: `Full payment for booking #${booking.bookingNumber} confirmed.`, notifType: 'payment_confirmation', relatedId: booking._id });
+      await inApp.create(client._id || client, { title: 'Payment Confirmed 🎉', message: `Full payment for booking #${booking.bookingNumber} confirmed. You're all set!`, notifType: 'payment_confirmation', relatedId: booking._id });
       if (client.email) {
-        await sendBookingConfirmationEmail(client.email, {
-          bookingNumber: booking.bookingNumber,
-          eventDate: booking.eventDate,
-          totalAmount: booking.pricing.totalAmount,
-          status: 'fully paid',
-        });
+        await sendFullPaymentConfirmationEmail(client.email, { firstName: client.firstName, bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, eventTime: booking.eventTime, serviceName: svc?.name, providerName: provider?.businessName || `${provider?.firstName||''} ${provider?.lastName||''}`.trim(), totalAmount: booking.pricing.totalAmount, paymentPlan: booking.paymentPlan });
+      }
+      if (provider) {
+        push.notifyPaymentReceived(provider, booking, 'balance', booking.balanceDue);
+        await inApp.create(provider._id, { title: 'Balance Received 💰', message: `Balance payment of ₦${Number(booking.balanceDue).toLocaleString()} received for booking #${booking.bookingNumber}. Booking is fully paid.`, notifType: 'payment_confirmation', relatedId: booking._id });
+        if (provider.email) {
+          const clientName = `${client.firstName} ${client.lastName}`;
+          await sendPaymentReceivedEmail(provider.email, { firstName: provider.firstName, bookingNumber: booking.bookingNumber, clientName, paymentType: 'balance', amount: booking.balanceDue, totalAmount: booking.pricing.totalAmount, balanceDue: 0, eventDate: booking.eventDate });
+        }
       }
     } catch (_) {}
 
@@ -511,8 +610,23 @@ const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
   await _upsertPaymentRecord(booking, booking.payment.transactionId, booking.pricing?.totalAmount || 0, 'full');
 
   try {
+    const User = require('../models/User');
     const client = booking.client;
+    const provider = await User.findById(booking.serviceProvider);
+    const svc = await require('../models/Service').findById(booking.service).select('name').catch(() => null);
     push.notifyPaymentConfirmation(client, booking);
+    await inApp.create(client._id || client, { title: 'Payment Confirmed 🎉', message: `Full payment for booking #${booking.bookingNumber} confirmed. You're all set!`, notifType: 'payment_confirmation', relatedId: booking._id });
+    if (client.email) {
+      await sendFullPaymentConfirmationEmail(client.email, { firstName: client.firstName, bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, eventTime: booking.eventTime, serviceName: svc?.name, providerName: provider?.businessName || `${provider?.firstName||''} ${provider?.lastName||''}`.trim(), totalAmount: booking.pricing.totalAmount, paymentPlan: booking.paymentPlan });
+    }
+    if (provider) {
+      push.notifyPaymentReceived(provider, booking, 'full', booking.pricing.totalAmount);
+      await inApp.create(provider._id, { title: 'Full Payment Received 💰', message: `Full payment of \u20A6${Number(booking.pricing.totalAmount).toLocaleString()} received for booking #${booking.bookingNumber}.`, notifType: 'payment_confirmation', relatedId: booking._id });
+      if (provider.email) {
+        const clientName = `${client.firstName} ${client.lastName}`;
+        await sendPaymentReceivedEmail(provider.email, { firstName: provider.firstName, bookingNumber: booking.bookingNumber, clientName, paymentType: 'full', amount: booking.pricing.totalAmount, totalAmount: booking.pricing.totalAmount, balanceDue: 0, eventDate: booking.eventDate });
+      }
+    }
   } catch (_) {}
 
   res.status(200).json({ success: true, message: 'Booking payment confirmed', booking });
@@ -633,9 +747,11 @@ const rejectBooking = asyncHandler(async (req, res) => {
 /**
  * Confirm booking (provider)
  * PATCH /api/bookings/:id/confirm
+ * Body (optional): { price: Number, message: String }
  */
 const confirmBooking = asyncHandler(async (req, res) => {
-  const booking = await Booking.findById(req.params.id);
+  const { price, message } = req.body || {};
+  const booking = await Booking.findById(req.params.id).populate('service');
 
   if (!booking) {
     return res.status(404).json({
@@ -657,6 +773,44 @@ const confirmBooking = asyncHandler(async (req, res) => {
       message: 'Can only confirm pending bookings',
     });
   }
+
+  // If service is priceOnRequest or has no price, provider must supply a price
+  const isPriceOnRequest = booking.service?.priceOnRequest || (booking.pricing?.basePrice === 0 && booking.pricing?.totalAmount === 0);
+  if (isPriceOnRequest && (!price || isNaN(Number(price)) || Number(price) <= 0)) {
+    return res.status(400).json({
+      success: false,
+      message: 'A price is required to confirm this booking because the service has no fixed price.',
+    });
+  }
+
+  // Apply provider-set price
+  if (price && Number(price) > 0) {
+    const feeSetting = await PlatformSetting.findOne({ key: 'feePercentage' });
+    const feeRate = feeSetting ? Number(feeSetting.value) / 100 : 0.10;
+    const newSubtotal = Number(price);
+    const serviceAndDeliveryFee = newSubtotal * feeRate;
+    const newTotal = newSubtotal + serviceAndDeliveryFee;
+    booking.pricing.basePrice = newSubtotal;
+    booking.pricing.unitPrice = newSubtotal;
+    booking.pricing.subtotal = newSubtotal;
+    booking.pricing.serviceAndDeliveryFee = serviceAndDeliveryFee;
+    booking.pricing.totalAmount = newTotal;
+    // Recalculate deposit/balance for split plans
+    if (booking.paymentPlan === PAYMENT_PLAN.SPLIT_50_50) {
+      booking.depositAmount = Math.round(newTotal * 0.5 * 100) / 100;
+      booking.balanceDue = Math.round(newTotal * 0.5 * 100) / 100;
+    } else if (booking.paymentPlan === PAYMENT_PLAN.DEPOSIT_20) {
+      booking.depositAmount = Math.round(newTotal * 0.2 * 100) / 100;
+      booking.balanceDue = Math.round(newTotal * 0.8 * 100) / 100;
+    } else {
+      booking.depositAmount = newTotal;
+      booking.balanceDue = 0;
+    }
+    // Store as adminSetPrices for display on client side
+    booking.adminSetPrices = [{ serviceId: booking.service?._id || booking.service, serviceName: booking.service?.name || 'Service', price: newSubtotal }];
+  }
+
+  if (message) booking.providerNotes = message;
 
   booking.status = BOOKING_STATUS.CONFIRMED;
   booking.confirmedDate = new Date();
@@ -1066,16 +1220,21 @@ const _handleSuccessfulPayment = async (booking, reference, amount) => {
     await _upsertPaymentRecord(booking, reference, booking.depositAmount || amount, 'deposit');
 
     try {
+      const User = require('../models/User');
       const client = booking.client;
+      const provider = await User.findById(booking.serviceProvider);
       require('../utils/pushNotification').notifyDepositPaid(client, booking);
+      await inApp.create(client._id || client, { title: 'Deposit Confirmed', message: `Deposit for booking #${booking.bookingNumber} received. Balance due: \u20A6${Number(booking.balanceDue).toLocaleString()}.`, notifType: 'deposit_paid', relatedId: booking._id });
       if (client?.email) {
-        await sendDepositPaidEmail(client.email, {
-          bookingNumber: booking.bookingNumber,
-          depositAmount: booking.depositAmount,
-          balanceDue: booking.balanceDue,
-          eventDate: booking.eventDate,
-          paymentPlan: booking.paymentPlan,
-        });
+        await sendDepositPaidEmail(client.email, { bookingNumber: booking.bookingNumber, depositAmount: booking.depositAmount, balanceDue: booking.balanceDue, eventDate: booking.eventDate, paymentPlan: booking.paymentPlan });
+      }
+      if (provider) {
+        require('../utils/pushNotification').notifyPaymentReceived(provider, booking, 'deposit', booking.depositAmount);
+        await inApp.create(provider._id, { title: 'Deposit Received 💰', message: `Deposit of \u20A6${Number(booking.depositAmount).toLocaleString()} received for booking #${booking.bookingNumber}. Balance due: \u20A6${Number(booking.balanceDue).toLocaleString()}.`, notifType: 'payment_confirmation', relatedId: booking._id });
+        if (provider.email) {
+          const clientName = client?.firstName ? `${client.firstName} ${client.lastName || ''}`.trim() : 'Client';
+          await sendPaymentReceivedEmail(provider.email, { firstName: provider.firstName, bookingNumber: booking.bookingNumber, clientName, paymentType: 'deposit', amount: booking.depositAmount, totalAmount: booking.pricing?.totalAmount, balanceDue: booking.balanceDue, eventDate: booking.eventDate });
+        }
       }
     } catch (_) {}
     return;
@@ -1091,8 +1250,23 @@ const _handleSuccessfulPayment = async (booking, reference, amount) => {
     await _upsertPaymentRecord(booking, reference, booking.balanceDue || amount, 'balance');
 
     try {
+      const User = require('../models/User');
       const client = booking.client;
+      const provider = await User.findById(booking.serviceProvider);
+      const svc = await require('../models/Service').findById(booking.service).select('name').catch(() => null);
       require('../utils/pushNotification').notifyPaymentConfirmation(client, booking);
+      await inApp.create(client._id || client, { title: 'Payment Confirmed 🎉', message: `Full payment for booking #${booking.bookingNumber} confirmed. You're all set!`, notifType: 'payment_confirmation', relatedId: booking._id });
+      if (client?.email) {
+        await sendFullPaymentConfirmationEmail(client.email, { firstName: client.firstName, bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, eventTime: booking.eventTime, serviceName: svc?.name, providerName: provider?.businessName || `${provider?.firstName||''} ${provider?.lastName||''}`.trim(), totalAmount: booking.pricing?.totalAmount, paymentPlan: booking.paymentPlan });
+      }
+      if (provider) {
+        require('../utils/pushNotification').notifyPaymentReceived(provider, booking, 'balance', booking.balanceDue);
+        await inApp.create(provider._id, { title: 'Balance Received 💰', message: `Balance payment of \u20A6${Number(booking.balanceDue).toLocaleString()} received for booking #${booking.bookingNumber}. Booking is fully paid.`, notifType: 'payment_confirmation', relatedId: booking._id });
+        if (provider.email) {
+          const clientName = client?.firstName ? `${client.firstName} ${client.lastName || ''}`.trim() : 'Client';
+          await sendPaymentReceivedEmail(provider.email, { firstName: provider.firstName, bookingNumber: booking.bookingNumber, clientName, paymentType: 'balance', amount: booking.balanceDue, totalAmount: booking.pricing?.totalAmount, balanceDue: 0, eventDate: booking.eventDate });
+        }
+      }
     } catch (_) {}
     return;
   }
@@ -1107,8 +1281,23 @@ const _handleSuccessfulPayment = async (booking, reference, amount) => {
   await _upsertPaymentRecord(booking, reference, amount || booking.pricing?.totalAmount || 0, 'full');
 
   try {
+    const User = require('../models/User');
     const client = booking.client;
+    const provider = await User.findById(booking.serviceProvider);
+    const svc = await require('../models/Service').findById(booking.service).select('name').catch(() => null);
     require('../utils/pushNotification').notifyPaymentConfirmation(client, booking);
+    await inApp.create(client._id || client, { title: 'Payment Confirmed 🎉', message: `Full payment for booking #${booking.bookingNumber} confirmed. You're all set!`, notifType: 'payment_confirmation', relatedId: booking._id });
+    if (client?.email) {
+      await sendFullPaymentConfirmationEmail(client.email, { firstName: client.firstName, bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, eventTime: booking.eventTime, serviceName: svc?.name, providerName: provider?.businessName || `${provider?.firstName||''} ${provider?.lastName||''}`.trim(), totalAmount: booking.pricing?.totalAmount, paymentPlan: booking.paymentPlan });
+    }
+    if (provider) {
+      require('../utils/pushNotification').notifyPaymentReceived(provider, booking, 'full', amount || booking.pricing?.totalAmount);
+      await inApp.create(provider._id, { title: 'Full Payment Received 💰', message: `Full payment of \u20A6${Number(booking.pricing?.totalAmount).toLocaleString()} received for booking #${booking.bookingNumber}.`, notifType: 'payment_confirmation', relatedId: booking._id });
+      if (provider.email) {
+        const clientName = client?.firstName ? `${client.firstName} ${client.lastName || ''}`.trim() : 'Client';
+        await sendPaymentReceivedEmail(provider.email, { firstName: provider.firstName, bookingNumber: booking.bookingNumber, clientName, paymentType: 'full', amount: amount || booking.pricing?.totalAmount, totalAmount: booking.pricing?.totalAmount, balanceDue: 0, eventDate: booking.eventDate });
+      }
+    }
   } catch (_) {}
 };
 

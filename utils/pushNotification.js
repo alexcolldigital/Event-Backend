@@ -168,6 +168,37 @@ const notifyNewMessage = (user, senderName, preview) => {
   );
 };
 
+const notifyNewBooking = (user, booking) => {
+  if (!isPrefEnabled(user, 'bookingUpdates')) return;
+  return sendPush(
+    user.fcmToken,
+    'New Booking Request 📋',
+    `Booking #${booking.bookingNumber} received. Please confirm or reject.`,
+    { type: 'new_booking', bookingId: String(booking._id) }
+  );
+};
+
+const notifyPaymentReceived = (user, booking, paymentType, amount) => {
+  if (!isPrefEnabled(user, 'paymentConfirmation')) return;
+  const label = paymentType === 'deposit' ? 'Deposit' : paymentType === 'balance' ? 'Balance' : 'Full payment';
+  return sendPush(
+    user.fcmToken,
+    `${label} Received 💰`,
+    `${label} of \u20A6${Number(amount).toLocaleString()} received for booking #${booking.bookingNumber}.`,
+    { type: 'payment_received', bookingId: String(booking._id) }
+  );
+};
+
+const notifyServiceUpdated = (user, serviceName) => {
+  if (!isPrefEnabled(user, 'bookingUpdates')) return;
+  return sendPush(
+    user.fcmToken,
+    'Service Updated ✅',
+    `Your service "${serviceName}" has been updated successfully.`,
+    { type: 'service_updated' }
+  );
+};
+
 module.exports = {
   sendPush,
   notifyBookingUpdate,
@@ -180,4 +211,7 @@ module.exports = {
   notifyNewMessage,
   notifyDepositPaid,
   notifyBalanceDueReminder,
+  notifyNewBooking,
+  notifyPaymentReceived,
+  notifyServiceUpdated,
 };

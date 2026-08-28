@@ -492,6 +492,97 @@ const sendPromotionalEmail = async (email, details) => {
   } catch (e) { console.error('Promotional email error:', e.message); }
 };
 
+const sendNewBookingAlertEmail = async (email, details) => {
+  const { firstName, bookingNumber, clientName, eventDate, serviceName, totalAmount, paymentPlan, depositAmount, balanceDue, bookingUrl } = details;
+  const planLabel = paymentPlan === 'deposit_20' ? '20% Deposit' : paymentPlan === 'split_50_50' ? '50/50 Split' : 'Full Payment';
+  try {
+    await sendMail({
+      to: email,
+      subject: `New Booking Request — #${bookingNumber}`,
+      html: layout('New Booking Request 📋', `
+        <p>Hi <strong>${firstName}</strong>,</p>
+        <p>You have a new booking request that requires your confirmation.</p>
+        <div class="box"><table>
+          <tr><td>Booking #</td><td>${bookingNumber}</td></tr>
+          <tr><td>Client</td><td>${clientName}</td></tr>
+          <tr><td>Service</td><td>${serviceName || 'N/A'}</td></tr>
+          <tr><td>Event Date</td><td>${new Date(eventDate).toDateString()}</td></tr>
+          <tr><td>Total Amount</td><td>&#8358;${Number(totalAmount || 0).toLocaleString()}</td></tr>
+          <tr><td>Payment Plan</td><td>${planLabel}</td></tr>
+          ${depositAmount ? `<tr><td>Deposit Amount</td><td>&#8358;${Number(depositAmount).toLocaleString()}</td></tr>` : ''}
+          ${balanceDue ? `<tr><td>Balance Due</td><td>&#8358;${Number(balanceDue).toLocaleString()}</td></tr>` : ''}
+        </table></div>
+        <div class="alert aw">Please confirm or reject this booking within 24 hours.</div>
+        <p style="text-align:center"><a href="${bookingUrl || (process.env.FRONTEND_URL || '#') + '/bookings'}" class="btn">Review Booking</a></p>`),
+    });
+  } catch (e) { console.error('New booking alert email error:', e.message); }
+};
+
+const sendPaymentReceivedEmail = async (email, details) => {
+  const { firstName, bookingNumber, clientName, paymentType, amount, depositPaid, balanceDue, totalAmount, eventDate } = details;
+  const label = paymentType === 'deposit' ? 'Deposit' : paymentType === 'balance' ? 'Balance' : 'Full Payment';
+  try {
+    await sendMail({
+      to: email,
+      subject: `${label} Received — Booking #${bookingNumber}`,
+      html: layout(`${label} Payment Received 💰`, `
+        <p>Hi <strong>${firstName}</strong>,</p>
+        <p>A <strong>${label.toLowerCase()}</strong> payment has been made by <strong>${clientName}</strong> for booking <strong>#${bookingNumber}</strong>.</p>
+        <div class="box"><table>
+          <tr><td>Booking #</td><td>${bookingNumber}</td></tr>
+          <tr><td>Client</td><td>${clientName}</td></tr>
+          <tr><td>Event Date</td><td>${new Date(eventDate).toDateString()}</td></tr>
+          <tr><td>${label} Paid</td><td>&#8358;${Number(amount).toLocaleString()}</td></tr>
+          <tr><td>Total Amount</td><td>&#8358;${Number(totalAmount || 0).toLocaleString()}</td></tr>
+          ${balanceDue > 0 ? `<tr><td>Remaining Balance</td><td>&#8358;${Number(balanceDue).toLocaleString()}</td></tr>` : ''}
+        </table></div>
+        ${balanceDue > 0
+          ? '<div class="alert aw">The client still has an outstanding balance to pay before the event.</div>'
+          : '<div class="alert as">This booking is now fully paid. Funds are held in escrow until the event is completed.</div>'}
+        <p style="text-align:center"><a href="${process.env.FRONTEND_URL || '#'}/bookings" class="btn">View Booking</a></p>`),
+    });
+  } catch (e) { console.error('Payment received email error:', e.message); }
+};
+
+const sendServiceUpdatedEmail = async (email, details) => {
+  const { firstName, serviceName, serviceId } = details;
+  try {
+    await sendMail({
+      to: email,
+      subject: `Your Service "${serviceName}" Has Been Updated`,
+      html: layout('Service Updated ✅', `
+        <p>Hi <strong>${firstName}</strong>,</p>
+        <p>Your service listing <strong>"${serviceName}"</strong> has been successfully updated on Event Compass.</p>
+        <div class="alert as">Your changes are now live and visible to clients.</div>
+        <p style="text-align:center"><a href="${process.env.FRONTEND_URL || '#'}/services/${serviceId || ''}" class="btn">View Listing</a></p>`),
+    });
+  } catch (e) { console.error('Service updated email error:', e.message); }
+};
+
+const sendFullPaymentConfirmationEmail = async (email, details) => {
+  const { firstName, bookingNumber, eventDate, eventTime, serviceName, providerName, totalAmount, paymentPlan } = details;
+  try {
+    await sendMail({
+      to: email,
+      subject: `Payment Confirmed — Booking #${bookingNumber} is Fully Paid`,
+      html: layout('Booking Fully Paid 🎉', `
+        <p>Hi <strong>${firstName}</strong>,</p>
+        <p>Your booking is now <strong>fully paid</strong> and confirmed. See you at the event!</p>
+        <div class="box"><table>
+          <tr><td>Booking #</td><td>${bookingNumber}</td></tr>
+          <tr><td>Service</td><td>${serviceName || 'N/A'}</td></tr>
+          <tr><td>Provider</td><td>${providerName || 'N/A'}</td></tr>
+          <tr><td>Event Date</td><td>${new Date(eventDate).toDateString()}</td></tr>
+          ${eventTime ? `<tr><td>Event Time</td><td>${eventTime}</td></tr>` : ''}
+          <tr><td>Total Paid</td><td>&#8358;${Number(totalAmount || 0).toLocaleString()}</td></tr>
+          <tr><td>Payment Plan</td><td>${paymentPlan === 'deposit_20' ? '20% Deposit + Balance' : paymentPlan === 'split_50_50' ? '50/50 Split' : 'Full Payment'}</td></tr>
+        </table></div>
+        <div class="alert as">Your slot is secured. No further payment is required.</div>
+        <p style="text-align:center"><a href="${process.env.FRONTEND_URL || '#'}/bookings" class="btn">View Booking</a></p>`),
+    });
+  } catch (e) { console.error('Full payment confirmation email error:', e.message); }
+};
+
 const sendNewMessageEmail = async (email, details) => {
   const { firstName, senderName, preview, conversationUrl } = details;
   try {
@@ -527,6 +618,10 @@ module.exports = {
   sendProviderSuspensionEmail,
   sendPromotionalEmail,
   sendNewMessageEmail,
+  sendNewBookingAlertEmail,
+  sendPaymentReceivedEmail,
+  sendServiceUpdatedEmail,
+  sendFullPaymentConfirmationEmail,
   getEmailStatus,
   verifyEmailTransport,
 };

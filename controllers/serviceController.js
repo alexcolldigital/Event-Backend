@@ -6,7 +6,9 @@
 const Service = require('../models/Service');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { uploadToCloudinary } = require('../utils/fileUpload');
-const { sendServiceAddedEmail } = require('../utils/email');
+const { sendServiceAddedEmail, sendServiceUpdatedEmail } = require('../utils/email');
+const push = require('../utils/pushNotification');
+const inApp = require('../utils/inAppNotification');
 
 /**
  * Create new service
@@ -198,6 +200,19 @@ const updateService = asyncHandler(async (req, res) => {
     new: true,
     runValidators: true,
   });
+
+  // Notify provider on update
+  try {
+    await service.populate('provider', 'firstName lastName businessName email fcmToken preferences');
+    const prov = service.provider;
+    if (prov) {
+      push.notifyServiceUpdated(prov, service.name);
+      await inApp.create(prov._id, { title: 'Service Updated ✅', message: `Your service "${service.name}" has been updated successfully.`, notifType: 'service_updated', relatedId: service._id });
+      if (prov.email) {
+        await sendServiceUpdatedEmail(prov.email, { firstName: prov.firstName, serviceName: service.name, serviceId: service._id });
+      }
+    }
+  } catch (_) {}
 
   res.status(200).json({
     success: true,

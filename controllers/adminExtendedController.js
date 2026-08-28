@@ -110,7 +110,7 @@ const getAllPayments = asyncHandler(async (req, res) => {
     Payment.find(query)
       .populate('payer', 'firstName lastName email')
       .populate('payee', 'firstName lastName businessName')
-      .populate('booking', 'bookingNumber status')
+      .populate('booking', 'bookingNumber status pricing paymentPlan depositPaid depositAmount balancePaid balanceDue balanceDeadline payment')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit)),

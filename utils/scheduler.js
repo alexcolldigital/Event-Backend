@@ -8,6 +8,23 @@ const push = require('./pushNotification');
 const inApp = require('./inAppNotification');
 const { sendBalanceDueReminderEmail, sendBookingReminderEmail } = require('./email');
 
+// ─── helpers ─────────────────────────────────────────────────────────────────
+
+const _sendEventReminder = async (booking, daysLabel) => {
+  try {
+    const client = await User.findById(booking.client);
+    if (!client) return;
+    const svc = await require('../models/Service').findById(booking.service).select('name').catch(() => null);
+    await push.notifyBookingReminder(client, booking);
+    await inApp.create(booking.client, { title: `Event Reminder \u23f0 (${daysLabel})`, message: `Your event for booking #${booking.bookingNumber} is in ${daysLabel}. Make sure everything is ready!`, notifType: 'booking_reminder', relatedId: booking._id });
+    if (client.email) {
+      await sendBookingReminderEmail(client.email, { firstName: client.firstName, bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, eventTime: booking.eventTime, serviceName: svc?.name });
+    }
+  } catch (err) {
+    console.error('Event reminder failed for booking', booking._id, err.message);
+  }
+};
+
 const processExpiredAcceptances = async () => {
   try {
     const now = new Date();
@@ -104,29 +121,47 @@ const processAutoReleases = async () => {
 const processBookingReminders = async () => {
   try {
     const now = new Date();
+
+    // 1-day reminder (tomorrow)
     const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
     const dayAfter = new Date(now.getTime() + 48 * 60 * 60 * 1000);
-
-    const bookings = await Booking.find({
+    const oneDayBookings = await Booking.find({
       status: BOOKING_STATUS.CONFIRMED,
       eventDate: { $gte: tomorrow, $lt: dayAfter },
       reminderSent: { $ne: true },
     });
+    for (const booking of oneDayBookings) {
+      await _sendEventReminder(booking, '1 day');
+      booking.reminderSent = true;
+      await booking.save();
+    }
 
-    for (const booking of bookings) {
-      try {
-        const client = await User.findById(booking.client);
-        await push.notifyBookingReminder(client, booking);
-        await inApp.create(booking.client, { title: 'Booking Reminder', message: `Reminder: Your booking #${booking.bookingNumber} is tomorrow.`, notifType: 'booking_reminder', relatedId: booking._id });
-        if (client?.email) {
-          const svc = await require('../models/Service').findById(booking.service).select('name').catch(() => null);
-          await sendBookingReminderEmail(client.email, { firstName: client.firstName, bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, eventTime: booking.eventTime, serviceName: svc?.name });
-        }
-        booking.reminderSent = true;
-        await booking.save();
-      } catch (err) {
-        console.error('Reminder push failed for booking', booking._id, err.message);
-      }
+    // 3-day reminder
+    const threeDays = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+    const threeDaysEnd = new Date(now.getTime() + 4 * 24 * 60 * 60 * 1000);
+    const threeDayBookings = await Booking.find({
+      status: BOOKING_STATUS.CONFIRMED,
+      eventDate: { $gte: threeDays, $lt: threeDaysEnd },
+      reminder3DaySent: { $ne: true },
+    });
+    for (const booking of threeDayBookings) {
+      await _sendEventReminder(booking, '3 days');
+      booking.reminder3DaySent = true;
+      await booking.save();
+    }
+
+    // 7-day reminder
+    const sevenDays = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const sevenDaysEnd = new Date(now.getTime() + 8 * 24 * 60 * 60 * 1000);
+    const sevenDayBookings = await Booking.find({
+      status: BOOKING_STATUS.CONFIRMED,
+      eventDate: { $gte: sevenDays, $lt: sevenDaysEnd },
+      reminder7DaySent: { $ne: true },
+    });
+    for (const booking of sevenDayBookings) {
+      await _sendEventReminder(booking, '7 days');
+      booking.reminder7DaySent = true;
+      await booking.save();
     }
   } catch (err) {
     console.error('processBookingReminders error', err);
@@ -136,35 +171,56 @@ const processBookingReminders = async () => {
 const processBalanceDueReminders = async () => {
   try {
     const now = new Date();
-    // Find deposit-plan bookings where balance is unpaid and event is within 7 days
+
+    // 7-day balance reminder
     const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-    const bookings = await Booking.find({
+    const sevenDayEnd = new Date(now.getTime() + 8 * 24 * 60 * 60 * 1000);
+    const bookings7 = await Booking.find({
       status: BOOKING_STATUS.CONFIRMED,
       paymentPlan: { $in: [PAYMENT_PLAN.SPLIT_50_50, PAYMENT_PLAN.DEPOSIT_20] },
       depositPaid: true,
       balancePaid: { $ne: true },
-      eventDate: { $gte: now, $lte: sevenDaysFromNow },
-      reminderScheduled: { $ne: true },
+      eventDate: { $gte: sevenDaysFromNow, $lt: sevenDayEnd },
+      balanceReminder7DaySent: { $ne: true },
     });
-
-    for (const booking of bookings) {
+    for (const booking of bookings7) {
       try {
         const client = await User.findById(booking.client);
-        const daysLeft = Math.ceil((new Date(booking.eventDate) - now) / (1000 * 60 * 60 * 24));
-        push.notifyBalanceDueReminder(client, booking, daysLeft);
-        await inApp.create(booking.client, { title: 'Balance Payment Reminder', message: `Your event is in ${daysLeft} day(s). Please pay the remaining ₦${Number(booking.balanceDue).toLocaleString()} for booking #${booking.bookingNumber}.`, notifType: 'booking_reminder', relatedId: booking._id });
+        push.notifyBalanceDueReminder(client, booking, 7);
+        await inApp.create(booking.client, { title: 'Balance Due in 7 Days ⚠️', message: `Your event is in 7 days. Please pay the remaining \u20A6${Number(booking.balanceDue).toLocaleString()} for booking #${booking.bookingNumber}.`, notifType: 'booking_reminder', relatedId: booking._id });
         if (client?.email) {
-          await sendBalanceDueReminderEmail(client.email, {
-            bookingNumber: booking.bookingNumber,
-            balanceDue: booking.balanceDue,
-            eventDate: booking.eventDate,
-            daysLeft,
-          });
+          await sendBalanceDueReminderEmail(client.email, { bookingNumber: booking.bookingNumber, balanceDue: booking.balanceDue, eventDate: booking.eventDate, daysLeft: 7 });
         }
-        booking.reminderScheduled = true;
+        booking.balanceReminder7DaySent = true;
         await booking.save();
       } catch (err) {
-        console.error('Balance due reminder failed for booking', booking._id, err.message);
+        console.error('7-day balance reminder failed for booking', booking._id, err.message);
+      }
+    }
+
+    // 3-day balance reminder
+    const threeDaysFromNow = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+    const threeDayEnd = new Date(now.getTime() + 4 * 24 * 60 * 60 * 1000);
+    const bookings3 = await Booking.find({
+      status: BOOKING_STATUS.CONFIRMED,
+      paymentPlan: { $in: [PAYMENT_PLAN.SPLIT_50_50, PAYMENT_PLAN.DEPOSIT_20] },
+      depositPaid: true,
+      balancePaid: { $ne: true },
+      eventDate: { $gte: threeDaysFromNow, $lt: threeDayEnd },
+      balanceReminder3DaySent: { $ne: true },
+    });
+    for (const booking of bookings3) {
+      try {
+        const client = await User.findById(booking.client);
+        push.notifyBalanceDueReminder(client, booking, 3);
+        await inApp.create(booking.client, { title: 'Balance Due in 3 Days 🚨', message: `URGENT: Your event is in 3 days. Pay the remaining \u20A6${Number(booking.balanceDue).toLocaleString()} for booking #${booking.bookingNumber} now to avoid cancellation.`, notifType: 'booking_reminder', relatedId: booking._id });
+        if (client?.email) {
+          await sendBalanceDueReminderEmail(client.email, { bookingNumber: booking.bookingNumber, balanceDue: booking.balanceDue, eventDate: booking.eventDate, daysLeft: 3 });
+        }
+        booking.balanceReminder3DaySent = true;
+        await booking.save();
+      } catch (err) {
+        console.error('3-day balance reminder failed for booking', booking._id, err.message);
       }
     }
   } catch (err) {
