@@ -54,10 +54,30 @@ const deleteImageFromCloudinary = async (publicId) => {
 
 const uploadToCloudinary = async (file, folder) => {
   try {
-    const result = await cloudinary.uploader.upload(file.path, {
-      folder: `event-compass/${folder}`,
-    });
-    return { url: result.secure_url, publicId: result.public_id };
+    if (!file) throw new Error('No file provided');
+
+    if (typeof file.path === 'string' && /^https?:\/\//.test(file.path)) {
+      return { url: file.path, publicId: file.filename || null };
+    }
+
+    if (file.buffer) {
+      const base64 = `data:${file.mimetype || 'application/octet-stream'};base64,${file.buffer.toString('base64')}`;
+      const result = await cloudinary.uploader.upload(base64, {
+        folder: `event-compass/${folder}`,
+        resource_type: 'auto',
+      });
+      return { url: result.secure_url, publicId: result.public_id };
+    }
+
+    if (file.path) {
+      const result = await cloudinary.uploader.upload(file.path, {
+        folder: `event-compass/${folder}`,
+        resource_type: 'auto',
+      });
+      return { url: result.secure_url, publicId: result.public_id };
+    }
+
+    throw new Error('Unsupported file payload for Cloudinary upload');
   } catch (error) {
     console.error('Error uploading to Cloudinary:', error);
     throw error;

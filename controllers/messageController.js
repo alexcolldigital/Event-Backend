@@ -46,17 +46,21 @@ const sendMessage = asyncHandler(async (req, res) => {
 
   // Handle file / image upload
   if (req.file) {
-    const isImage = req.file.mimetype.startsWith('image/');
+    const isImage = (req.file.mimetype || '').startsWith('image/');
     type = isImage ? 'image' : 'file';
-    const uploaded = await uploadToCloudinary(req.file, 'chat');
+
+    const uploaded = typeof req.file.path === 'string' && /^https?:\/\//.test(req.file.path)
+      ? { url: req.file.path, publicId: req.file.filename || null }
+      : await uploadToCloudinary(req.file, 'chat');
+
     attachment = {
       url: uploaded.url,
       publicId: uploaded.publicId,
-      name: req.file.originalname,
+      name: req.file.originalname || 'attachment',
       size: req.file.size,
-      mimeType: req.file.mimetype,
+      mimeType: req.file.mimetype || 'application/octet-stream',
     };
-    if (!messageContent) messageContent = isImage ? '📷 Image' : `📎 ${req.file.originalname}`;
+    if (!messageContent) messageContent = isImage ? '📷 Image' : `📎 ${req.file.originalname || 'File'}`;
   }
 
   if (!messageContent && type === 'text') {
@@ -107,13 +111,13 @@ const sendMessage = asyncHandler(async (req, res) => {
 
 const getConversations = asyncHandler(async (req, res) => {
   const userId = req.userId;
+  const userObjectId = require('mongoose').Types.ObjectId.createFromHexString(userId);
 
-  // Get latest message per conversation
   const conversations = await Message.aggregate([
     {
       $match: {
         isDeleted: false,
-        $or: [{ sender: require('mongoose').Types.ObjectId.createFromHexString(userId) }, { receiver: require('mongoose').Types.ObjectId.createFromHexString(userId) }],
+        $or: [{ sender: userObjectId }, { receiver: userObjectId }],
       },
     },
     { $sort: { createdAt: -1 } },
@@ -126,10 +130,10 @@ const getConversations = asyncHandler(async (req, res) => {
             $cond: [
               {
                 $and: [
-                  { $eq: ['$receiver', require('mongoose').Types.ObjectId.createFromHexString(userId)] },
+                  { $eq: ['$receiver', userObjectId] },
                   {
                     $not: {
-                      $in: [require('mongoose').Types.ObjectId.createFromHexString(userId), '$readBy.user'],
+                      $in: [userObjectId, '$readBy.user'],
                     },
                   },
                 ],
@@ -144,14 +148,45 @@ const getConversations = asyncHandler(async (req, res) => {
     { $sort: { 'lastMessage.createdAt': -1 } },
   ]);
 
-  // Populate sender/receiver on each last message
   await Message.populate(conversations, [
     { path: 'lastMessage.sender', select: 'firstName lastName profileImage role businessName' },
     { path: 'lastMessage.receiver', select: 'firstName lastName profileImage role businessName' },
     { path: 'lastMessage.booking', select: 'bookingNumber status' },
   ]);
 
-  res.status(200).json({ success: true, conversations });
+  const resolvedConversations = await Promise.all(
+    conversations.map(async (conversation) => {
+      const lastMessage = conversation.lastMessage || {};
+      const lastMessageSenderId = lastMessage.sender && (typeof lastMessage.sender === 'object' ? lastMessage.sender._id : lastMessage.sender);
+      const lastMessageReceiverId = lastMessage.receiver && (typeof lastMessage.receiver === 'object' ? lastMessage.receiver._id : lastMessage.receiver);
+
+      if (!lastMessage.sender && lastMessageReceiverId) {
+        const peer = await User.findById(lastMessageReceiverId).select('firstName lastName businessName role profileImage');
+        if (peer) conversation.lastMessage.sender = peer;
+      }
+
+      if (!lastMessage.receiver && lastMessageSenderId) {
+        const peer = await User.findById(lastMessageSenderId).select('firstName lastName businessName role profileImage');
+        if (peer) conversation.lastMessage.receiver = peer;
+      }
+
+      if (!lastMessage.sender && !lastMessage.receiver && conversation._id) {
+        const ids = String(conversation._id).split('_').filter(Boolean);
+        const peerId = ids.find((id) => String(id) !== String(userId));
+        if (peerId) {
+          const peer = await User.findById(peerId).select('firstName lastName businessName role profileImage');
+          if (peer) {
+            conversation.lastMessage.sender = peer;
+            conversation.lastMessage.receiver = { _id: userId };
+          }
+        }
+      }
+
+      return conversation;
+    })
+  );
+
+  res.status(200).json({ success: true, conversations: resolvedConversations });
 });
 
 // ─── Get messages for a conversation ─────────────────────────────────────────

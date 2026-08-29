@@ -1,29 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const cloudinary = require('cloudinary').v2;
 const messageController = require('../controllers/messageController');
 const { authenticate } = require('../middleware/auth');
 
-// Custom Cloudinary storage engine (compatible with cloudinary v2)
-const chatStorage = {
-  _handleFile(req, file, cb) {
-    const uploadStream = cloudinary.uploader.upload_stream(
-      { folder: 'event-compass/chat', resource_type: 'auto' },
-      (error, result) => {
-        if (error) return cb(error);
-        cb(null, { path: result.secure_url, filename: result.public_id });
-      }
-    );
-    file.stream.pipe(uploadStream);
-  },
-  _removeFile(req, file, cb) {
-    cloudinary.uploader.destroy(file.filename, cb);
-  },
-};
-
+// Keep multipart parsing simple and let the controller upload to Cloudinary once.
 const chatUpload = multer({
-  storage: chatStorage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 15 * 1024 * 1024 },
 }).single('attachment');
 
