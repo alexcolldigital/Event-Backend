@@ -719,7 +719,10 @@ const resendVerification = asyncHandler(async (req, res) => {
   if (!user) return res.status(404).json({ success: false, message: 'User not found' });
   if (user.isEmailVerified) return res.status(400).json({ success: false, message: 'Email already verified' });
 
-  await sendOtpToUser(user);
+  const sent = await sendOtpToUser(user);
+  if (!sent) {
+    return res.status(503).json({ success: false, message: 'Verification email could not be sent. Please try again later.' });
+  }
   res.status(200).json({ success: true, message: 'Verification code sent to your email' });
 });
 
