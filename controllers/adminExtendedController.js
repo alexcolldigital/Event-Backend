@@ -18,6 +18,7 @@ const CMSPage = require('../models/CMSPage');
 const PlatformSetting = require('../models/PlatformSetting');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { sendPromotionalEmail } = require('../utils/email');
+const { SUPPORT_CONTACT_KEY, DEFAULT_SUPPORT_CONTACT, getSupportContactValue } = require('./supportController');
 
 // ─── AUDIT LOG HELPER ────────────────────────────────────────────────────────
 const logAudit = async (req, action, resource, resourceId, details, status = 'success') => {
@@ -68,6 +69,37 @@ const updateCommissionSettings = asyncHandler(async (req, res) => {
   });
   await logAudit(req, 'UPDATE_COMMISSION', 'PlatformSetting', null, req.body);
   res.json({ success: true, message: 'Commission settings updated', commission });
+});
+
+const getSupportContactSettings = asyncHandler(async (req, res) => {
+  const supportContact = await getSupportContactValue();
+  res.json({ success: true, supportContact });
+});
+
+const updateSupportContactSettings = asyncHandler(async (req, res) => {
+  const phoneNumber = String(req.body.phoneNumber || '').trim();
+  const whatsappUrl = String(req.body.whatsappUrl || '').trim();
+
+  if (whatsappUrl && !/^https:\/\/(wa\.me|api\.whatsapp\.com)\//i.test(whatsappUrl)) {
+    return res.status(400).json({
+      success: false,
+      message: 'WhatsApp link must start with https://wa.me/ or https://api.whatsapp.com/',
+    });
+  }
+
+  const supportContact = {
+    ...DEFAULT_SUPPORT_CONTACT,
+    phoneNumber,
+    whatsappUrl,
+  };
+
+  await PlatformSetting.findOneAndUpdate(
+    { key: SUPPORT_CONTACT_KEY },
+    { key: SUPPORT_CONTACT_KEY, value: supportContact, description: 'Public support phone number and WhatsApp link' },
+    { upsert: true, new: true }
+  );
+  await logAudit(req, 'UPDATE_SUPPORT_CONTACT', 'PlatformSetting', null, supportContact);
+  res.json({ success: true, message: 'Support contact updated', supportContact });
 });
 
 const getCommissionBreakdown = asyncHandler(async (req, res) => {
@@ -693,6 +725,8 @@ module.exports = {
   getCommissionSettings,
   updateCommissionSettings,
   getCommissionBreakdown,
+  getSupportContactSettings,
+  updateSupportContactSettings,
   // Payments
   getAllPayments,
   // Refunds

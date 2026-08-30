@@ -194,6 +194,12 @@ const serviceSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    isDeleted: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    deletedAt: Date,
 
     // Tags for search
     tags: [String],

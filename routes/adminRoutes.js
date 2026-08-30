@@ -58,6 +58,8 @@ router.get('/commission/breakdown', ext.getCommissionBreakdown);
 // Dedicated fee settings (service fee + delivery fee percentages)
 router.get('/settings/fees', ext.getCommissionSettings);
 router.put('/settings/fees', ext.updateCommissionSettings);
+router.get('/settings/support-contact', ext.getSupportContactSettings);
+router.put('/settings/support-contact', ext.updateSupportContactSettings);
 
 // Cancellation policy
 router.get('/cancellation-policy', ext.getCancellationPolicy);

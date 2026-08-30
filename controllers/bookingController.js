@@ -12,6 +12,7 @@ const { calcClientRefund, applyProviderStrike, loadStrikeThreshold } = require('
 const { isBookingWithinCoverage } = require('../utils/locationMatcher');
 const { buildCartCheckoutPayloads } = require('../utils/cartCheckout');
 const { buildCheckoutSessionPayload } = require('../utils/payment');
+const { buildBookingReceipt } = require('../utils/receipt');
 const gateway = require('../utils/gateway');
 const PlatformSetting = require('../models/PlatformSetting');
 const Payout = require('../models/Payout');
@@ -167,6 +168,12 @@ const createBooking = asyncHandler(async (req, res) => {
 
   await booking.save();
   booking = await booking.populate('client serviceProvider service venue');
+  booking.receipt = buildBookingReceipt(booking, {
+    paymentType: 'booking',
+    status: booking.payment?.status || PAYMENT_STATUS.PENDING,
+    amountPaid: 0,
+  });
+  await booking.save();
 
   // Notify client (submission confirmation) + provider/admin (new booking alert)
   try {
@@ -364,6 +371,12 @@ const checkoutCart = asyncHandler(async (req, res) => {
 
     await booking.save();
     const populatedBooking = await booking.populate('client serviceProvider service venue');
+    populatedBooking.receipt = buildBookingReceipt(populatedBooking, {
+      paymentType: 'booking',
+      status: populatedBooking.payment?.status || PAYMENT_STATUS.PENDING,
+      amountPaid: 0,
+    });
+    await populatedBooking.save();
     createdBookings.push(populatedBooking);
 
     // Notify client + provider/admin for each cart booking
@@ -522,7 +535,12 @@ const createBookingPaymentSession = asyncHandler(async (req, res) => {
  */
 const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
   const { paymentType } = req.body; // 'deposit', 'balance', or 'full'
-  const booking = await Booking.findById(req.params.id).populate('client');
+  const booking = await Booking.findById(req.params.id)
+    .populate('client')
+    .populate('serviceProvider')
+    .populate('service')
+    .populate('venue')
+    .populate('event');
 
   if (!booking) {
     return res.status(404).json({ success: false, message: 'Booking not found' });
@@ -540,6 +558,14 @@ const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
     booking.payment.status = PAYMENT_STATUS.PENDING; // still pending until balance paid
     booking.payment.paymentDate = new Date();
     booking.payment.method = booking.payment.method || 'paystack';
+    booking.receipt = buildBookingReceipt(booking, {
+      paymentType: 'deposit',
+      status: booking.payment.status,
+      amountPaid: booking.depositAmount,
+      method: booking.payment.method,
+      transactionId: booking.payment.transactionId,
+      paymentDate: booking.payment.paymentDate,
+    });
     await booking.save();
     await _upsertPaymentRecord(booking, booking.payment.transactionId, booking.depositAmount, 'deposit');
 
@@ -570,6 +596,14 @@ const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
     booking.balancePaid = true;
     booking.payment.status = PAYMENT_STATUS.COMPLETED;
     booking.payment.paymentDate = new Date();
+    booking.receipt = buildBookingReceipt(booking, {
+      paymentType: 'balance',
+      status: booking.payment.status,
+      amountPaid: booking.pricing?.totalAmount || 0,
+      method: booking.payment.method,
+      transactionId: booking.payment.transactionId,
+      paymentDate: booking.payment.paymentDate,
+    });
     await booking.save();
     await _upsertPaymentRecord(booking, booking.payment.transactionId, booking.balanceDue, 'balance');
 
@@ -606,6 +640,14 @@ const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
   booking.payment.method = booking.payment.method || 'paystack';
   booking.depositPaid = true;
   booking.balancePaid = true;
+  booking.receipt = buildBookingReceipt(booking, {
+    paymentType: 'full',
+    status: booking.payment.status,
+    amountPaid: booking.pricing?.totalAmount || 0,
+    method: booking.payment.method,
+    transactionId: booking.payment.transactionId,
+    paymentDate: booking.payment.paymentDate,
+  });
   await booking.save();
   await _upsertPaymentRecord(booking, booking.payment.transactionId, booking.pricing?.totalAmount || 0, 'full');
 
@@ -823,6 +865,13 @@ const confirmBooking = asyncHandler(async (req, res) => {
   } catch (e) {
     booking.autoReleaseAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
   }
+  booking.receipt = buildBookingReceipt(booking, {
+    paymentType: 'booking',
+    status: booking.payment?.status || PAYMENT_STATUS.PENDING,
+    amountPaid: booking.depositPaid
+      ? (booking.balancePaid ? booking.pricing?.totalAmount : booking.depositAmount)
+      : 0,
+  });
   await booking.save();
 
   // Generate payment checkout URL for the client
@@ -1105,7 +1154,12 @@ const handlePaystackWebhookRaw = async (req, res) => {
       return res.status(200).send('ignored');
     }
 
-    const booking = await Booking.findById(bookingId).populate('client');
+    const booking = await Booking.findById(bookingId)
+      .populate('client')
+      .populate('serviceProvider')
+      .populate('service')
+      .populate('venue')
+      .populate('event');
     if (!booking) return res.status(404).send('Booking not found');
 
     if (payload.event === 'charge.success' || (data.status && data.status === 'success')) {
@@ -1148,7 +1202,12 @@ const handleFlutterwaveWebhook = async (req, res) => {
       return res.status(200).send('ignored');
     }
 
-    const booking = await Booking.findById(bookingId).populate('client');
+    const booking = await Booking.findById(bookingId)
+      .populate('client')
+      .populate('serviceProvider')
+      .populate('service')
+      .populate('venue')
+      .populate('event');
     if (!booking) return res.status(404).send('Booking not found');
 
     await _handleSuccessfulPayment(booking, reference, amount);
@@ -1174,6 +1233,14 @@ const _upsertPaymentRecord = async (booking, reference, paidAmount, paymentType)
     const platformFee = paidAmount * commissionRate;
     const payeeAmount = paidAmount - platformFee;
     const txnId = reference || `TXN-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const paymentReceipt = buildBookingReceipt(booking, {
+      paymentType,
+      status: PAYMENT_STATUS.COMPLETED,
+      amountPaid: paidAmount,
+      method: booking.payment?.method || 'paystack',
+      transactionId: txnId,
+      paymentDate: booking.payment?.paymentDate || new Date(),
+    });
 
     await Payment.findOneAndUpdate(
       { booking: booking._id, 'metadata.paymentType': paymentType },
@@ -1197,6 +1264,7 @@ const _upsertPaymentRecord = async (booking, reference, paidAmount, paymentType)
           eventName: booking.event?.name || '',
           serviceName: booking.service?.name || '',
         },
+        receipt: paymentReceipt,
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
@@ -1216,6 +1284,14 @@ const _handleSuccessfulPayment = async (booking, reference, amount) => {
     booking.depositPaid = true;
     booking.payment.transactionId = reference || booking.payment.transactionId;
     booking.payment.paymentDate = new Date();
+    booking.receipt = buildBookingReceipt(booking, {
+      paymentType: 'deposit',
+      status: booking.payment.status,
+      amountPaid: booking.depositAmount || amount,
+      method: booking.payment.method,
+      transactionId: booking.payment.transactionId,
+      paymentDate: booking.payment.paymentDate,
+    });
     await booking.save();
     await _upsertPaymentRecord(booking, reference, booking.depositAmount || amount, 'deposit');
 
@@ -1246,6 +1322,14 @@ const _handleSuccessfulPayment = async (booking, reference, amount) => {
     booking.payment.status = PAYMENT_STATUS.COMPLETED;
     booking.payment.transactionId = reference || booking.payment.transactionId;
     booking.payment.paymentDate = new Date();
+    booking.receipt = buildBookingReceipt(booking, {
+      paymentType: 'balance',
+      status: booking.payment.status,
+      amountPaid: booking.pricing?.totalAmount || 0,
+      method: booking.payment.method,
+      transactionId: booking.payment.transactionId,
+      paymentDate: booking.payment.paymentDate,
+    });
     await booking.save();
     await _upsertPaymentRecord(booking, reference, booking.balanceDue || amount, 'balance');
 
@@ -1277,6 +1361,14 @@ const _handleSuccessfulPayment = async (booking, reference, amount) => {
   booking.payment.paymentDate = new Date();
   booking.depositPaid = true;
   booking.balancePaid = true;
+  booking.receipt = buildBookingReceipt(booking, {
+    paymentType: 'full',
+    status: booking.payment.status,
+    amountPaid: amount || booking.pricing?.totalAmount || 0,
+    method: booking.payment.method,
+    transactionId: booking.payment.transactionId,
+    paymentDate: booking.payment.paymentDate,
+  });
   await booking.save();
   await _upsertPaymentRecord(booking, reference, amount || booking.pricing?.totalAmount || 0, 'full');
 

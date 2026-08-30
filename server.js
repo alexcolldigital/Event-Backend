@@ -27,6 +27,7 @@ const serviceRoutes = require('./routes/serviceRoutes');
 const bookingRoutes = require('./routes/bookingRoutes');
 const messageRoutes = require('./routes/messageRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const supportRoutes = require('./routes/supportRoutes');
 const bookingController = require('./controllers/bookingController');
 const scheduler = require('./utils/scheduler');
 const { getEmailStatus, verifyEmailTransport } = require('./utils/email');
@@ -269,6 +270,7 @@ app.use('/api/auth', requireDatabase, authRoutes);
 app.use('/api/services', requireDatabase, serviceRoutes);
 app.use('/api/bookings', requireDatabase, bookingRoutes);
 app.use('/api/messages', requireDatabase, messageRoutes);
+app.use('/api/support', requireDatabase, supportRoutes);
 app.use('/api/admin', requireDatabase, adminRoutes);
 
 const frontendDistPath = path.join(__dirname, '../frontend/dist');

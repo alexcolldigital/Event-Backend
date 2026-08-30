@@ -183,6 +183,7 @@ const bookingSchema = new mongoose.Schema(
       },
       refundAmount: Number,
     },
+    receipt: mongoose.Schema.Types.Mixed,
 
     // Timeline
     confirmedDate: Date,

@@ -439,7 +439,7 @@ const getSystemReports = asyncHandler(async (req, res) => {
 const getAllServices = asyncHandler(async (req, res) => {
   const { category, provider, isActive, isFeatured, page = 1, limit = 10, search } = req.query;
 
-  let query = {};
+  let query = { isDeleted: { $ne: true } };
 
   if (category) query.category = category;
   if (provider) query.provider = provider;
@@ -480,7 +480,7 @@ const getAllServices = asyncHandler(async (req, res) => {
  * GET /api/admin/services/:id
  */
 const getServiceById = asyncHandler(async (req, res) => {
-  const service = await Service.findById(req.params.id).populate(
+  const service = await Service.findOne({ _id: req.params.id, isDeleted: { $ne: true } }).populate(
     'provider',
     'firstName lastName businessName email profileImage averageRating totalReviews'
   );
@@ -587,7 +587,7 @@ const createService = asyncHandler(async (req, res) => {
  * PUT /api/admin/services/:id
  */
 const updateService = asyncHandler(async (req, res) => {
-  let service = await Service.findById(req.params.id);
+  let service = await Service.findOne({ _id: req.params.id, isDeleted: { $ne: true } });
 
   if (!service) {
     return res.status(404).json({
@@ -613,7 +613,7 @@ const updateService = asyncHandler(async (req, res) => {
  * DELETE /api/admin/services/:id
  */
 const deleteService = asyncHandler(async (req, res) => {
-  const service = await Service.findById(req.params.id);
+  const service = await Service.findOne({ _id: req.params.id, isDeleted: { $ne: true } });
 
   if (!service) {
     return res.status(404).json({
@@ -622,11 +622,27 @@ const deleteService = asyncHandler(async (req, res) => {
     });
   }
 
-  await Service.findByIdAndDelete(req.params.id);
+  const linkedBookings = await Booking.countDocuments({ service: service._id });
+
+  if (linkedBookings > 0) {
+    service.isDeleted = true;
+    service.deletedAt = new Date();
+    service.isActive = false;
+    service.isFeatured = false;
+    service.availability = {
+      ...(service.availability?.toObject ? service.availability.toObject() : service.availability || {}),
+      isAvailable: false,
+    };
+    await service.save();
+  } else {
+    await Service.findByIdAndDelete(req.params.id);
+  }
 
   res.status(200).json({
     success: true,
-    message: 'Service deleted successfully',
+    message: linkedBookings > 0
+      ? 'Service removed from listings. Booking history was preserved.'
+      : 'Service deleted successfully',
   });
 });
 
@@ -635,7 +651,7 @@ const deleteService = asyncHandler(async (req, res) => {
  * PATCH /api/admin/services/:id/toggle-featured
  */
 const toggleFeatured = asyncHandler(async (req, res) => {
-  const service = await Service.findById(req.params.id);
+  const service = await Service.findOne({ _id: req.params.id, isDeleted: { $ne: true } });
 
   if (!service) {
     return res.status(404).json({
@@ -659,7 +675,7 @@ const toggleFeatured = asyncHandler(async (req, res) => {
  * PATCH /api/admin/services/:id/toggle-active
  */
 const toggleActive = asyncHandler(async (req, res) => {
-  const service = await Service.findById(req.params.id);
+  const service = await Service.findOne({ _id: req.params.id, isDeleted: { $ne: true } });
 
   if (!service) {
     return res.status(404).json({
@@ -683,7 +699,7 @@ const toggleActive = asyncHandler(async (req, res) => {
  * POST /api/admin/services/:id/upload-media
  */
 const uploadServiceMedia = asyncHandler(async (req, res) => {
-  const service = await Service.findById(req.params.id);
+  const service = await Service.findOne({ _id: req.params.id, isDeleted: { $ne: true } });
 
   if (!service) {
     return res.status(404).json({ success: false, message: 'Service not found' });

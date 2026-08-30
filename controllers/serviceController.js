@@ -115,7 +115,7 @@ const createService = asyncHandler(async (req, res) => {
 const getServices = asyncHandler(async (req, res) => {
   const { category, minPrice, maxPrice, rating, state, page = 1, limit = 10 } = req.query;
 
-  let query = { isActive: true };
+  let query = { isActive: true, isDeleted: { $ne: true } };
 
   if (category) query.category = category;
   if (minPrice || maxPrice) {
@@ -153,7 +153,7 @@ const getServices = asyncHandler(async (req, res) => {
  * GET /api/services/:id
  */
 const getServiceById = asyncHandler(async (req, res) => {
-  const service = await Service.findById(req.params.id).populate(
+  const service = await Service.findOne({ _id: req.params.id, isDeleted: { $ne: true } }).populate(
     'provider',
     'firstName lastName businessName email phoneNumber role profileImage averageRating totalReviews'
   );
@@ -176,7 +176,7 @@ const getServiceById = asyncHandler(async (req, res) => {
  * GET /api/services/provider/my-services
  */
 const getMyServices = asyncHandler(async (req, res) => {
-  const services = await Service.find({ provider: req.userId })
+  const services = await Service.find({ provider: req.userId, isDeleted: { $ne: true } })
     .populate('provider', 'firstName lastName businessName')
     .sort({ createdAt: -1 });
 
@@ -191,7 +191,7 @@ const getMyServices = asyncHandler(async (req, res) => {
  * PUT /api/services/:id
  */
 const updateService = asyncHandler(async (req, res) => {
-  let service = await Service.findById(req.params.id);
+  let service = await Service.findOne({ _id: req.params.id, isDeleted: { $ne: true } });
 
   if (!service) {
     return res.status(404).json({
@@ -254,7 +254,7 @@ const updateService = asyncHandler(async (req, res) => {
  * DELETE /api/services/:id
  */
 const deleteService = asyncHandler(async (req, res) => {
-  const service = await Service.findById(req.params.id);
+  const service = await Service.findOne({ _id: req.params.id, isDeleted: { $ne: true } });
 
   if (!service) {
     return res.status(404).json({
@@ -271,11 +271,19 @@ const deleteService = asyncHandler(async (req, res) => {
     });
   }
 
-  await Service.findByIdAndDelete(req.params.id);
+  service.isDeleted = true;
+  service.deletedAt = new Date();
+  service.isActive = false;
+  service.isFeatured = false;
+  service.availability = {
+    ...(service.availability?.toObject ? service.availability.toObject() : service.availability || {}),
+    isAvailable: false,
+  };
+  await service.save();
 
   res.status(200).json({
     success: true,
-    message: 'Service deleted successfully',
+    message: 'Service removed from listings successfully',
   });
 });
 
@@ -287,7 +295,7 @@ const searchServices = asyncHandler(async (req, res) => {
   const { keyword, category, state, lga, minPrice, maxPrice, page = 1, limit = 10 } =
     req.query;
 
-  let query = { isActive: true };
+  let query = { isActive: true, isDeleted: { $ne: true } };
 
   if (keyword) {
     query.$or = [
@@ -333,7 +341,7 @@ const searchServices = asyncHandler(async (req, res) => {
  * PATCH /api/services/:id/toggle-availability
  */
 const toggleAvailability = asyncHandler(async (req, res) => {
-  const service = await Service.findById(req.params.id);
+  const service = await Service.findOne({ _id: req.params.id, isDeleted: { $ne: true } });
 
   if (!service) {
     return res.status(404).json({
@@ -360,7 +368,7 @@ const toggleAvailability = asyncHandler(async (req, res) => {
 });
 
 const uploadServiceMedia = asyncHandler(async (req, res) => {
-  const service = await Service.findById(req.params.id);
+  const service = await Service.findOne({ _id: req.params.id, isDeleted: { $ne: true } });
 
   if (!service) {
     return res.status(404).json({ success: false, message: 'Service not found' });
@@ -402,11 +410,11 @@ const getPublicStats = asyncHandler(async (req, res) => {
       User.countDocuments({ role: 'service_provider', isBusinessVerified: true }),
       User.countDocuments({ role: 'client' }),
       Service.aggregate([
-        { $match: { isActive: true, totalReviews: { $gt: 0 } } },
+        { $match: { isActive: true, isDeleted: { $ne: true }, totalReviews: { $gt: 0 } } },
         { $group: { _id: null, ratingSum: { $sum: { $multiply: ['$averageRating', '$totalReviews'] } }, total: { $sum: '$totalReviews' } } },
       ]),
       Service.aggregate([
-        { $match: { isActive: true } },
+        { $match: { isActive: true, isDeleted: { $ne: true } } },
         { $group: { _id: '$category', count: { $sum: 1 } } },
       ]),
     ]);

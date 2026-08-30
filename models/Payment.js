@@ -40,6 +40,7 @@ const paymentSchema = new mongoose.Schema(
       serviceName: String,
       paymentType: { type: String, enum: ['full', 'deposit', 'balance'], default: 'full' },
     },
+    receipt: mongoose.Schema.Types.Mixed,
   },
   { timestamps: true }
 );
