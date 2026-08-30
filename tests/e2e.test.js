@@ -35,6 +35,7 @@ let adminToken, customerToken, providerToken;
 let adminId, customerId, providerId;
 let canopyServiceId, chairServiceId;
 let bookingId;
+let adminDeleteBookingId;
 let conversationId;
 
 const RUN_ID = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
@@ -109,6 +110,9 @@ afterAll(async () => {
   }
   if (bookingId) {
     await Message.deleteMany({ booking: bookingId });
+  }
+  if (adminDeleteBookingId) {
+    await Booking.deleteOne({ _id: adminDeleteBookingId });
   }
   if (customerId) {
     await Booking.deleteMany({ client: customerId });
@@ -571,5 +575,59 @@ describe('11. Admin Completes Booking', () => {
 
     expect(res.body.success).toBe(true);
     expect(res.body.booking.status).toBe('completed');
+  });
+});
+
+// 12. Admin Deletes Services
+describe('12. Admin Deletes Services', () => {
+  it('admin deletes a service with no linked bookings', async () => {
+    const res = await request(app)
+      .delete(`/api/admin/services/${chairServiceId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+
+    expect(res.body.success).toBe(true);
+    expect(res.body.message).toBe('Service deleted successfully');
+
+    await request(app)
+      .get(`/api/admin/services/${chairServiceId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(404);
+  });
+
+  it('admin removes a booked service from listings while preserving booking history', async () => {
+    const Booking = require('../models/Booking');
+
+    const deleteBooking = await Booking.create({
+      bookingNumber: `EC-DELETE-${RUN_ID}`,
+      client: customerId,
+      serviceProvider: adminId,
+      service: canopyServiceId,
+      bookingType: 'service',
+      eventDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      pricing: { basePrice: 120000, totalAmount: 120000, currency: 'NGN' },
+    });
+    adminDeleteBookingId = deleteBooking._id;
+
+    const res = await request(app)
+      .delete(`/api/admin/services/${canopyServiceId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+
+    expect(res.body.success).toBe(true);
+    expect(res.body.message).toBe('Service removed from listings. Booking history was preserved.');
+
+    await request(app)
+      .get(`/api/admin/services/${canopyServiceId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(404);
+
+    const bookingRes = await request(app)
+      .get(`/api/admin/bookings/${adminDeleteBookingId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+
+    expect(bookingRes.body.success).toBe(true);
+    expect(String(bookingRes.body.booking.service?._id || bookingRes.body.booking.service)).toBe(canopyServiceId);
   });
 });
