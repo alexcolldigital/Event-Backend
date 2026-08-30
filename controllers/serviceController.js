@@ -5,6 +5,7 @@
 
 const Service = require('../models/Service');
 const Category = require('../models/Category');
+const mongoose = require('mongoose');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { uploadToCloudinary } = require('../utils/fileUpload');
 const { sendServiceAddedEmail, sendServiceUpdatedEmail } = require('../utils/email');
@@ -464,19 +465,21 @@ const getAvailableCategories = asyncHandler(async (req, res) => {
  * Validate if a category exists and is active
  * Helper function - validates category/subcategory
  */
-const validateCategory = asyncHandler(async (category, subCategory) => {
+const validateCategory = async (category, subCategory) => {
   if (!category) {
     throw new Error('Category is required');
   }
 
   // Check if category exists and is active
-  const categoryDoc = await Category.findOne({
-    $or: [
-      { name: category, isActive: true },
-      { slug: category, isActive: true },
-      { _id: category, isActive: true },
-    ],
-  });
+  const categoryFilters = [
+    { name: category, isActive: true },
+    { slug: category, isActive: true },
+  ];
+  if (mongoose.Types.ObjectId.isValid(category)) {
+    categoryFilters.push({ _id: category, isActive: true });
+  }
+
+  const categoryDoc = await Category.findOne({ $or: categoryFilters });
 
   if (!categoryDoc) {
     throw new Error(`Category "${category}" does not exist or is not available. Please select from available categories.`);
@@ -484,13 +487,15 @@ const validateCategory = asyncHandler(async (category, subCategory) => {
 
   // If subcategory is provided, validate it exists as a child of the parent
   if (subCategory) {
-    const subCategoryDoc = await Category.findOne({
-      $or: [
-        { name: subCategory, parentCategory: categoryDoc._id, isActive: true },
-        { slug: subCategory, parentCategory: categoryDoc._id, isActive: true },
-        { _id: subCategory, parentCategory: categoryDoc._id, isActive: true },
-      ],
-    });
+    const subCategoryFilters = [
+      { name: subCategory, parentCategory: categoryDoc._id, isActive: true },
+      { slug: subCategory, parentCategory: categoryDoc._id, isActive: true },
+    ];
+    if (mongoose.Types.ObjectId.isValid(subCategory)) {
+      subCategoryFilters.push({ _id: subCategory, parentCategory: categoryDoc._id, isActive: true });
+    }
+
+    const subCategoryDoc = await Category.findOne({ $or: subCategoryFilters });
 
     if (!subCategoryDoc) {
       throw new Error(`Subcategory "${subCategory}" is not valid for the selected category. Please select from available options.`);
@@ -500,7 +505,7 @@ const validateCategory = asyncHandler(async (category, subCategory) => {
   }
 
   return { categoryId: categoryDoc._id, category: categoryDoc.name, subCategory: null };
-});
+};
 
 module.exports = {
   createService,

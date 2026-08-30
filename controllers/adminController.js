@@ -9,8 +9,52 @@ const Service = require('../models/Service');
 const Payment = require('../models/Payment');
 const Analytics = require('../models/Analytics');
 const PlatformSetting = require('../models/PlatformSetting');
+const Category = require('../models/Category');
+const mongoose = require('mongoose');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { BOOKING_STATUS, PAYMENT_STATUS } = require('../config/constants');
+const { buildBookingReceipt } = require('../utils/receipt');
+const { sendBookingConfirmationEmail, sendBookingAcceptedEmail } = require('../utils/email');
+
+const validateServiceCategory = async (category, subCategory) => {
+  if (!category) {
+    throw new Error('Category is required');
+  }
+
+  const categoryFilters = [
+    { name: category, isActive: true },
+    { slug: category, isActive: true },
+  ];
+  if (mongoose.Types.ObjectId.isValid(category)) {
+    categoryFilters.push({ _id: category, isActive: true });
+  }
+
+  const categoryDoc = await Category.findOne({ $or: categoryFilters });
+
+  if (!categoryDoc) {
+    throw new Error(`Category "${category}" does not exist or is not available. Please select from available categories.`);
+  }
+
+  if (subCategory) {
+    const subCategoryFilters = [
+      { name: subCategory, parentCategory: categoryDoc._id, isActive: true },
+      { slug: subCategory, parentCategory: categoryDoc._id, isActive: true },
+    ];
+    if (mongoose.Types.ObjectId.isValid(subCategory)) {
+      subCategoryFilters.push({ _id: subCategory, parentCategory: categoryDoc._id, isActive: true });
+    }
+
+    const subCategoryDoc = await Category.findOne({ $or: subCategoryFilters });
+
+    if (!subCategoryDoc) {
+      throw new Error(`Subcategory "${subCategory}" is not valid for the selected category. Please select from available options.`);
+    }
+
+    return { category: categoryDoc.name, subCategory: subCategoryDoc.name };
+  }
+
+  return { category: categoryDoc.name, subCategory: '' };
+};
 
 /**
  * Get dashboard statistics
@@ -535,6 +579,15 @@ const createService = asyncHandler(async (req, res) => {
   }
 
   const normalizedServiceType = serviceType || 'Professional Service';
+  let categoryData;
+  try {
+    categoryData = await validateServiceCategory(category, subCategory);
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
 
   // If provider is not specified, use a default admin user or require it
   const serviceProvider = (provider && provider.trim()) ? provider : req.userId;
@@ -544,8 +597,8 @@ const createService = asyncHandler(async (req, res) => {
     description,
     shortDescription: description?.slice(0, 200),
     serviceType: normalizedServiceType,
-    category,
-    subCategory,
+    category: categoryData.category,
+    subCategory: categoryData.subCategory,
     provider: serviceProvider,
     providerType: providerType || 'events_service_provider',
     pricing: {
@@ -594,6 +647,19 @@ const updateService = asyncHandler(async (req, res) => {
       success: false,
       message: 'Service not found',
     });
+  }
+
+  if (req.body.category || req.body.subCategory) {
+    try {
+      const categoryData = await validateServiceCategory(req.body.category || service.category, req.body.subCategory || '');
+      req.body.category = categoryData.category;
+      req.body.subCategory = categoryData.subCategory;
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
   }
 
   service = await Service.findByIdAndUpdate(req.params.id, req.body, {
@@ -784,13 +850,41 @@ const adminConfirmBooking = asyncHandler(async (req, res) => {
   booking.status = BOOKING_STATUS.CONFIRMED;
   booking.confirmedDate = new Date();
   if (message) booking.adminNote = message;
+  booking.receipt = buildBookingReceipt(booking, {
+    paymentType: 'booking',
+    status: booking.payment?.status || PAYMENT_STATUS.PENDING,
+    amountPaid: booking.depositPaid
+      ? (booking.balancePaid ? booking.pricing?.totalAmount : booking.depositAmount)
+      : 0,
+  });
   await booking.save();
 
   // Notify client (non-blocking)
   try {
     const User = require('../models/User');
     const client = await User.findById(booking.client);
-    if (client) require('../utils/pushNotification').notifyBookingUpdate(client, booking);
+    if (client) {
+      require('../utils/pushNotification').notifyBookingUpdate(client, booking);
+      if (client.email) {
+        const provider = await User.findById(booking.serviceProvider).select('firstName lastName businessName').catch(() => null);
+        await sendBookingConfirmationEmail(client.email, {
+          bookingNumber: booking.bookingNumber,
+          eventDate: booking.eventDate,
+          totalAmount: booking.pricing?.totalAmount,
+          status: booking.status,
+          receipt: booking.receipt,
+        });
+        await sendBookingAcceptedEmail(client.email, {
+          firstName: client.firstName,
+          bookingNumber: booking.bookingNumber,
+          eventDate: booking.eventDate,
+          serviceName: booking.service?.name,
+          providerName: provider?.businessName || `${provider?.firstName || ''} ${provider?.lastName || ''}`.trim(),
+          totalAmount: booking.pricing?.totalAmount,
+          receipt: booking.receipt,
+        });
+      }
+    }
   } catch (_) {}
 
   res.status(200).json({ success: true, message: 'Booking confirmed by admin', booking });

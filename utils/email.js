@@ -187,6 +187,118 @@ const layout = (title, body) => {
 
 // ─── Email functions ──────────────────────────────────────────────────────────
 
+const escapeHtml = (value) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const formatMoney = (value, currency = 'NGN') => {
+  const amount = Number(value || 0);
+  const symbol = currency === 'NGN' ? 'NGN ' : `${escapeHtml(currency)} `;
+  return `${symbol}${Number.isFinite(amount) ? amount.toLocaleString() : '0'}`;
+};
+
+const formatDate = (value) => {
+  if (!value) return 'N/A';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? escapeHtml(value) : date.toDateString();
+};
+
+const formatLocation = (location = {}) => {
+  if (!location || typeof location !== 'object') return '';
+  return [
+    location.address,
+    location.lga,
+    location.city,
+    location.state,
+    location.country,
+  ].filter(Boolean).join(', ');
+};
+
+const paymentPlanLabel = (paymentPlan) => (
+  paymentPlan === 'deposit_20'
+    ? '20% Deposit + Balance'
+    : paymentPlan === 'split_50_50'
+      ? '50/50 Split'
+      : 'Full Payment'
+);
+
+const renderRows = (rows) => rows
+  .filter(([, value]) => value !== undefined && value !== null && value !== '')
+  .map(([label, value]) => `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(value)}</td></tr>`)
+  .join('');
+
+const renderReceiptDetails = (receipt, fallback = {}) => {
+  if (!receipt) return '';
+
+  const event = receipt.eventDetails || {};
+  const amounts = receipt.amounts || {};
+  const payment = receipt.payment || {};
+  const items = Array.isArray(receipt.items) ? receipt.items : [];
+  const currency = amounts.currency || 'NGN';
+  const location = formatLocation(event.bookingLocation);
+
+  const eventRows = renderRows([
+    ['Receipt #', receipt.receiptNumber],
+    ['Booking #', receipt.bookingNumber || fallback.bookingNumber],
+    ['Event Date', formatDate(event.eventDate || fallback.eventDate)],
+    ['End Date', event.eventEndDate ? formatDate(event.eventEndDate) : ''],
+    ['Event Time', event.eventTime],
+    ['Duration', event.duration],
+    ['Guests', event.numberOfGuests],
+    ['Location', location],
+    ['Special Requirements', event.specialRequirements],
+    ['Client Notes', event.clientNotes],
+  ]);
+
+  const itemRows = items.length
+    ? items.map((item) => `
+      <tr>
+        <td>${escapeHtml(item.name || 'Service')}${item.category ? `<br><span style="color:#64748b;font-size:12px;font-weight:600">${escapeHtml(item.category)}</span>` : ''}</td>
+        <td style="text-align:center">${escapeHtml(item.quantity || 1)}</td>
+        <td style="text-align:right">${formatMoney(item.unitPrice, currency)}</td>
+        <td style="text-align:right">${formatMoney(item.amount, currency)}</td>
+      </tr>`).join('')
+    : `<tr><td colspan="4" style="text-align:center;color:#64748b">No services listed</td></tr>`;
+
+  const amountRows = [
+    ['Subtotal', formatMoney(amounts.subtotal ?? fallback.subtotal, currency)],
+    ['Service & Delivery Fee', formatMoney(amounts.serviceAndDeliveryFee, currency)],
+    ['Discount', amounts.discount ? `-${formatMoney(amounts.discount, currency)}` : ''],
+    ['Tax', amounts.tax ? formatMoney(amounts.tax, currency) : ''],
+    ['Total Amount', formatMoney(amounts.totalAmount ?? fallback.totalAmount, currency)],
+    ['Amount Paid', formatMoney(amounts.amountPaid ?? fallback.amount, currency)],
+    ['Balance Due', formatMoney(amounts.balanceDue ?? fallback.balanceDue, currency)],
+    ['Payment Plan', paymentPlanLabel(payment.paymentPlan || fallback.paymentPlan)],
+    ['Payment Type', payment.paymentType],
+    ['Payment Method', payment.method],
+    ['Transaction ID', payment.transactionId],
+    ['Payment Date', payment.paymentDate ? formatDate(payment.paymentDate) : ''],
+  ];
+
+  return `
+    <hr>
+    <p><strong>Event details, selected services, and amounts</strong></p>
+    <div class="box"><table>${eventRows}</table></div>
+    <div class="box">
+      <table>
+        <thead>
+          <tr>
+            <td style="font-weight:800;color:#0f172a">Service</td>
+            <td style="font-weight:800;color:#0f172a;text-align:center">Qty</td>
+            <td style="font-weight:800;color:#0f172a;text-align:right">Unit</td>
+            <td style="font-weight:800;color:#0f172a;text-align:right">Amount</td>
+          </tr>
+        </thead>
+        <tbody>${itemRows}</tbody>
+      </table>
+    </div>
+    <div class="box"><table>${renderRows(amountRows)}</table></div>`;
+};
+
 const sendWelcomeEmail = async (email, firstName, activationUrl) => {
   try {
     await sendMail({
@@ -299,7 +411,8 @@ const sendBookingConfirmationEmail = async (email, bookingDetails) => {
           <tr><td>Event Date</td><td>${bookingDetails.eventDate}</td></tr>
           <tr><td>Total Amount</td><td>${bookingDetails.totalAmount}</td></tr>
           <tr><td>Status</td><td>${bookingDetails.status}</td></tr>
-        </table></div>`),
+        </table></div>
+        ${renderReceiptDetails(bookingDetails.receipt, bookingDetails)}`),
     });
   } catch (e) { console.error('Booking confirmation email error:', e.message); }
 };
@@ -316,7 +429,8 @@ const sendPaymentReceiptEmail = async (email, paymentDetails) => {
           <tr><td>Amount</td><td>${paymentDetails.amount}</td></tr>
           <tr><td>Date</td><td>${new Date().toLocaleDateString()}</td></tr>
           <tr><td>Status</td><td>${paymentDetails.status}</td></tr>
-        </table></div>`),
+        </table></div>
+        ${renderReceiptDetails(paymentDetails.receipt, paymentDetails)}`),
     });
   } catch (e) { console.error('Payment receipt email error:', e.message); }
 };
@@ -335,6 +449,7 @@ const sendDepositPaidEmail = async (email, details) => {
           <tr><td>Balance Due</td><td>&#8358;${Number(balanceDue).toLocaleString()}</td></tr>
           <tr><td>Event Date</td><td>${new Date(eventDate).toDateString()}</td></tr>
         </table></div>
+        ${renderReceiptDetails(details.receipt, details)}
         <div class="alert ae">Complete the remaining balance before your event date to avoid cancellation.</div>`),
     });
   } catch (e) { console.error('Deposit paid email error:', e.message); }
@@ -417,6 +532,7 @@ const sendBookingAcceptedEmail = async (email, details) => {
           <tr><td>Event Date</td><td>${new Date(eventDate).toDateString()}</td></tr>
           <tr><td>Total Amount</td><td>&#8358;${Number(totalAmount || 0).toLocaleString()}</td></tr>
         </table></div>
+        ${renderReceiptDetails(details.receipt, details)}
         <div class="alert as">Proceed to payment to secure your slot.</div>
         <p style="text-align:center"><a href="${checkoutUrl || (process.env.FRONTEND_URL || '#') + '/bookings'}" class="btn btn-green">Proceed to Payment</a></p>`),
     });
@@ -512,6 +628,7 @@ const sendNewBookingAlertEmail = async (email, details) => {
           ${depositAmount ? `<tr><td>Deposit Amount</td><td>&#8358;${Number(depositAmount).toLocaleString()}</td></tr>` : ''}
           ${balanceDue ? `<tr><td>Balance Due</td><td>&#8358;${Number(balanceDue).toLocaleString()}</td></tr>` : ''}
         </table></div>
+        ${renderReceiptDetails(details.receipt, details)}
         <div class="alert aw">Please confirm or reject this booking within 24 hours.</div>
         <p style="text-align:center"><a href="${bookingUrl || (process.env.FRONTEND_URL || '#') + '/bookings'}" class="btn">Review Booking</a></p>`),
     });
@@ -536,6 +653,7 @@ const sendPaymentReceivedEmail = async (email, details) => {
           <tr><td>Total Amount</td><td>&#8358;${Number(totalAmount || 0).toLocaleString()}</td></tr>
           ${balanceDue > 0 ? `<tr><td>Remaining Balance</td><td>&#8358;${Number(balanceDue).toLocaleString()}</td></tr>` : ''}
         </table></div>
+        ${renderReceiptDetails(details.receipt, details)}
         ${balanceDue > 0
           ? '<div class="alert aw">The client still has an outstanding balance to pay before the event.</div>'
           : '<div class="alert as">This booking is now fully paid. Funds are held in escrow until the event is completed.</div>'}
@@ -577,6 +695,7 @@ const sendFullPaymentConfirmationEmail = async (email, details) => {
           <tr><td>Total Paid</td><td>&#8358;${Number(totalAmount || 0).toLocaleString()}</td></tr>
           <tr><td>Payment Plan</td><td>${paymentPlan === 'deposit_20' ? '20% Deposit + Balance' : paymentPlan === 'split_50_50' ? '50/50 Split' : 'Full Payment'}</td></tr>
         </table></div>
+        ${renderReceiptDetails(details.receipt, details)}
         <div class="alert as">Your slot is secured. No further payment is required.</div>
         <p style="text-align:center"><a href="${process.env.FRONTEND_URL || '#'}/bookings" class="btn">View Booking</a></p>`),
     });

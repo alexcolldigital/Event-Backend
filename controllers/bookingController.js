@@ -196,6 +196,7 @@ const createBooking = asyncHandler(async (req, res) => {
           eventDate: booking.eventDate,
           totalAmount: booking.pricing.totalAmount,
           status: 'Pending Provider Confirmation',
+          receipt: booking.receipt,
         });
       }
     }
@@ -215,6 +216,7 @@ const createBooking = asyncHandler(async (req, res) => {
           paymentPlan: selectedPlan,
           depositAmount: booking.depositAmount,
           balanceDue: booking.balanceDue,
+          receipt: booking.receipt,
         });
       }
     }
@@ -235,6 +237,7 @@ const createBooking = asyncHandler(async (req, res) => {
           paymentPlan: selectedPlan,
           depositAmount: booking.depositAmount,
           balanceDue: booking.balanceDue,
+          receipt: booking.receipt,
         });
       }
     }
@@ -393,14 +396,14 @@ const checkoutCart = asyncHandler(async (req, res) => {
         push.notifyBookingUpdate(cartClient, { ...populatedBooking.toObject(), status: 'submitted' });
         await inApp.create(cartClient._id, { title: 'Booking Submitted ✅', message: `Booking #${booking.bookingNumber} for ${cartSvcName} submitted. Awaiting provider confirmation.`, notifType: 'booking_update', relatedId: booking._id });
         if (cartClient.email) {
-          await sendBookingConfirmationEmail(cartClient.email, { bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, totalAmount: booking.pricing.totalAmount, status: 'Pending Provider Confirmation' });
+          await sendBookingConfirmationEmail(cartClient.email, { bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, totalAmount: booking.pricing.totalAmount, status: 'Pending Provider Confirmation', receipt: populatedBooking.receipt });
         }
       }
       if (cartProvider) {
         push.notifyNewBooking(cartProvider, booking);
         await inApp.create(cartProvider._id, { title: 'New Booking Request 📋', message: `New booking #${booking.bookingNumber} from ${cartClientName} for ${cartSvcName}.`, notifType: 'new_booking', relatedId: booking._id });
         if (cartProvider.email) {
-          await sendNewBookingAlertEmail(cartProvider.email, { firstName: cartProvider.firstName, bookingNumber: booking.bookingNumber, clientName: cartClientName, eventDate: booking.eventDate, serviceName: cartSvcName, totalAmount: booking.pricing.totalAmount, paymentPlan: selectedPlan, depositAmount: booking.depositAmount, balanceDue: booking.balanceDue });
+          await sendNewBookingAlertEmail(cartProvider.email, { firstName: cartProvider.firstName, bookingNumber: booking.bookingNumber, clientName: cartClientName, eventDate: booking.eventDate, serviceName: cartSvcName, totalAmount: booking.pricing.totalAmount, paymentPlan: selectedPlan, depositAmount: booking.depositAmount, balanceDue: booking.balanceDue, receipt: populatedBooking.receipt });
         }
       }
     } catch (_) {}
@@ -577,14 +580,14 @@ const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
       push.notifyDepositPaid(client, booking);
       await inApp.create(client._id || client, { title: 'Deposit Confirmed', message: `Deposit for booking #${booking.bookingNumber} received. Balance due: ₦${Number(booking.balanceDue).toLocaleString()}.`, notifType: 'deposit_paid', relatedId: booking._id });
       if (client.email) {
-        await sendDepositPaidEmail(client.email, { bookingNumber: booking.bookingNumber, depositAmount: booking.depositAmount, balanceDue: booking.balanceDue, eventDate: booking.eventDate, paymentPlan: booking.paymentPlan });
+        await sendDepositPaidEmail(client.email, { bookingNumber: booking.bookingNumber, depositAmount: booking.depositAmount, balanceDue: booking.balanceDue, eventDate: booking.eventDate, paymentPlan: booking.paymentPlan, receipt: booking.receipt });
       }
       if (provider) {
         push.notifyPaymentReceived(provider, booking, 'deposit', booking.depositAmount);
         await inApp.create(provider._id, { title: 'Deposit Received 💰', message: `Deposit of ₦${Number(booking.depositAmount).toLocaleString()} received for booking #${booking.bookingNumber}. Balance due: ₦${Number(booking.balanceDue).toLocaleString()}.`, notifType: 'payment_confirmation', relatedId: booking._id });
         if (provider.email) {
           const clientName = `${client.firstName} ${client.lastName}`;
-          await sendPaymentReceivedEmail(provider.email, { firstName: provider.firstName, bookingNumber: booking.bookingNumber, clientName, paymentType: 'deposit', amount: booking.depositAmount, totalAmount: booking.pricing.totalAmount, balanceDue: booking.balanceDue, eventDate: booking.eventDate });
+          await sendPaymentReceivedEmail(provider.email, { firstName: provider.firstName, bookingNumber: booking.bookingNumber, clientName, paymentType: 'deposit', amount: booking.depositAmount, totalAmount: booking.pricing.totalAmount, balanceDue: booking.balanceDue, eventDate: booking.eventDate, receipt: booking.receipt });
         }
       }
     } catch (_) {}
@@ -615,14 +618,14 @@ const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
       push.notifyPaymentConfirmation(client, booking);
       await inApp.create(client._id || client, { title: 'Payment Confirmed 🎉', message: `Full payment for booking #${booking.bookingNumber} confirmed. You're all set!`, notifType: 'payment_confirmation', relatedId: booking._id });
       if (client.email) {
-        await sendFullPaymentConfirmationEmail(client.email, { firstName: client.firstName, bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, eventTime: booking.eventTime, serviceName: svc?.name, providerName: provider?.businessName || `${provider?.firstName||''} ${provider?.lastName||''}`.trim(), totalAmount: booking.pricing.totalAmount, paymentPlan: booking.paymentPlan });
+        await sendFullPaymentConfirmationEmail(client.email, { firstName: client.firstName, bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, eventTime: booking.eventTime, serviceName: svc?.name, providerName: provider?.businessName || `${provider?.firstName||''} ${provider?.lastName||''}`.trim(), totalAmount: booking.pricing.totalAmount, paymentPlan: booking.paymentPlan, receipt: booking.receipt });
       }
       if (provider) {
         push.notifyPaymentReceived(provider, booking, 'balance', booking.balanceDue);
         await inApp.create(provider._id, { title: 'Balance Received 💰', message: `Balance payment of ₦${Number(booking.balanceDue).toLocaleString()} received for booking #${booking.bookingNumber}. Booking is fully paid.`, notifType: 'payment_confirmation', relatedId: booking._id });
         if (provider.email) {
           const clientName = `${client.firstName} ${client.lastName}`;
-          await sendPaymentReceivedEmail(provider.email, { firstName: provider.firstName, bookingNumber: booking.bookingNumber, clientName, paymentType: 'balance', amount: booking.balanceDue, totalAmount: booking.pricing.totalAmount, balanceDue: 0, eventDate: booking.eventDate });
+          await sendPaymentReceivedEmail(provider.email, { firstName: provider.firstName, bookingNumber: booking.bookingNumber, clientName, paymentType: 'balance', amount: booking.balanceDue, totalAmount: booking.pricing.totalAmount, balanceDue: 0, eventDate: booking.eventDate, receipt: booking.receipt });
         }
       }
     } catch (_) {}
@@ -659,14 +662,14 @@ const markBookingPaymentSuccess = asyncHandler(async (req, res) => {
     push.notifyPaymentConfirmation(client, booking);
     await inApp.create(client._id || client, { title: 'Payment Confirmed 🎉', message: `Full payment for booking #${booking.bookingNumber} confirmed. You're all set!`, notifType: 'payment_confirmation', relatedId: booking._id });
     if (client.email) {
-      await sendFullPaymentConfirmationEmail(client.email, { firstName: client.firstName, bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, eventTime: booking.eventTime, serviceName: svc?.name, providerName: provider?.businessName || `${provider?.firstName||''} ${provider?.lastName||''}`.trim(), totalAmount: booking.pricing.totalAmount, paymentPlan: booking.paymentPlan });
+      await sendFullPaymentConfirmationEmail(client.email, { firstName: client.firstName, bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, eventTime: booking.eventTime, serviceName: svc?.name, providerName: provider?.businessName || `${provider?.firstName||''} ${provider?.lastName||''}`.trim(), totalAmount: booking.pricing.totalAmount, paymentPlan: booking.paymentPlan, receipt: booking.receipt });
     }
     if (provider) {
       push.notifyPaymentReceived(provider, booking, 'full', booking.pricing.totalAmount);
       await inApp.create(provider._id, { title: 'Full Payment Received 💰', message: `Full payment of \u20A6${Number(booking.pricing.totalAmount).toLocaleString()} received for booking #${booking.bookingNumber}.`, notifType: 'payment_confirmation', relatedId: booking._id });
       if (provider.email) {
         const clientName = `${client.firstName} ${client.lastName}`;
-        await sendPaymentReceivedEmail(provider.email, { firstName: provider.firstName, bookingNumber: booking.bookingNumber, clientName, paymentType: 'full', amount: booking.pricing.totalAmount, totalAmount: booking.pricing.totalAmount, balanceDue: 0, eventDate: booking.eventDate });
+        await sendPaymentReceivedEmail(provider.email, { firstName: provider.firstName, bookingNumber: booking.bookingNumber, clientName, paymentType: 'full', amount: booking.pricing.totalAmount, totalAmount: booking.pricing.totalAmount, balanceDue: 0, eventDate: booking.eventDate, receipt: booking.receipt });
       }
     }
   } catch (_) {}
@@ -907,6 +910,7 @@ const confirmBooking = asyncHandler(async (req, res) => {
           eventDate: booking.eventDate,
           totalAmount: booking.pricing.totalAmount,
           status: booking.status,
+          receipt: booking.receipt,
         });
       }
       push.notifyBookingAccepted(client, booking);
@@ -919,7 +923,7 @@ const confirmBooking = asyncHandler(async (req, res) => {
       if (client.email) {
         const svc = await require('../models/Service').findById(booking.service).select('name').catch(() => null);
         const provider = await require('../models/User').findById(booking.serviceProvider).select('firstName lastName businessName').catch(() => null);
-        await sendBookingAcceptedEmail(client.email, { firstName: client.firstName, bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, serviceName: svc?.name, providerName: provider?.businessName || `${provider?.firstName||''} ${provider?.lastName||''}`.trim(), totalAmount: booking.pricing.totalAmount, checkoutUrl });
+        await sendBookingAcceptedEmail(client.email, { firstName: client.firstName, bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, serviceName: svc?.name, providerName: provider?.businessName || `${provider?.firstName||''} ${provider?.lastName||''}`.trim(), totalAmount: booking.pricing.totalAmount, checkoutUrl, receipt: booking.receipt });
       }
     }
   } catch (emailErr) {
@@ -1302,14 +1306,14 @@ const _handleSuccessfulPayment = async (booking, reference, amount) => {
       require('../utils/pushNotification').notifyDepositPaid(client, booking);
       await inApp.create(client._id || client, { title: 'Deposit Confirmed', message: `Deposit for booking #${booking.bookingNumber} received. Balance due: \u20A6${Number(booking.balanceDue).toLocaleString()}.`, notifType: 'deposit_paid', relatedId: booking._id });
       if (client?.email) {
-        await sendDepositPaidEmail(client.email, { bookingNumber: booking.bookingNumber, depositAmount: booking.depositAmount, balanceDue: booking.balanceDue, eventDate: booking.eventDate, paymentPlan: booking.paymentPlan });
+        await sendDepositPaidEmail(client.email, { bookingNumber: booking.bookingNumber, depositAmount: booking.depositAmount, balanceDue: booking.balanceDue, eventDate: booking.eventDate, paymentPlan: booking.paymentPlan, receipt: booking.receipt });
       }
       if (provider) {
         require('../utils/pushNotification').notifyPaymentReceived(provider, booking, 'deposit', booking.depositAmount);
         await inApp.create(provider._id, { title: 'Deposit Received 💰', message: `Deposit of \u20A6${Number(booking.depositAmount).toLocaleString()} received for booking #${booking.bookingNumber}. Balance due: \u20A6${Number(booking.balanceDue).toLocaleString()}.`, notifType: 'payment_confirmation', relatedId: booking._id });
         if (provider.email) {
           const clientName = client?.firstName ? `${client.firstName} ${client.lastName || ''}`.trim() : 'Client';
-          await sendPaymentReceivedEmail(provider.email, { firstName: provider.firstName, bookingNumber: booking.bookingNumber, clientName, paymentType: 'deposit', amount: booking.depositAmount, totalAmount: booking.pricing?.totalAmount, balanceDue: booking.balanceDue, eventDate: booking.eventDate });
+          await sendPaymentReceivedEmail(provider.email, { firstName: provider.firstName, bookingNumber: booking.bookingNumber, clientName, paymentType: 'deposit', amount: booking.depositAmount, totalAmount: booking.pricing?.totalAmount, balanceDue: booking.balanceDue, eventDate: booking.eventDate, receipt: booking.receipt });
         }
       }
     } catch (_) {}
@@ -1341,14 +1345,14 @@ const _handleSuccessfulPayment = async (booking, reference, amount) => {
       require('../utils/pushNotification').notifyPaymentConfirmation(client, booking);
       await inApp.create(client._id || client, { title: 'Payment Confirmed 🎉', message: `Full payment for booking #${booking.bookingNumber} confirmed. You're all set!`, notifType: 'payment_confirmation', relatedId: booking._id });
       if (client?.email) {
-        await sendFullPaymentConfirmationEmail(client.email, { firstName: client.firstName, bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, eventTime: booking.eventTime, serviceName: svc?.name, providerName: provider?.businessName || `${provider?.firstName||''} ${provider?.lastName||''}`.trim(), totalAmount: booking.pricing?.totalAmount, paymentPlan: booking.paymentPlan });
+        await sendFullPaymentConfirmationEmail(client.email, { firstName: client.firstName, bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, eventTime: booking.eventTime, serviceName: svc?.name, providerName: provider?.businessName || `${provider?.firstName||''} ${provider?.lastName||''}`.trim(), totalAmount: booking.pricing?.totalAmount, paymentPlan: booking.paymentPlan, receipt: booking.receipt });
       }
       if (provider) {
         require('../utils/pushNotification').notifyPaymentReceived(provider, booking, 'balance', booking.balanceDue);
         await inApp.create(provider._id, { title: 'Balance Received 💰', message: `Balance payment of \u20A6${Number(booking.balanceDue).toLocaleString()} received for booking #${booking.bookingNumber}. Booking is fully paid.`, notifType: 'payment_confirmation', relatedId: booking._id });
         if (provider.email) {
           const clientName = client?.firstName ? `${client.firstName} ${client.lastName || ''}`.trim() : 'Client';
-          await sendPaymentReceivedEmail(provider.email, { firstName: provider.firstName, bookingNumber: booking.bookingNumber, clientName, paymentType: 'balance', amount: booking.balanceDue, totalAmount: booking.pricing?.totalAmount, balanceDue: 0, eventDate: booking.eventDate });
+          await sendPaymentReceivedEmail(provider.email, { firstName: provider.firstName, bookingNumber: booking.bookingNumber, clientName, paymentType: 'balance', amount: booking.balanceDue, totalAmount: booking.pricing?.totalAmount, balanceDue: 0, eventDate: booking.eventDate, receipt: booking.receipt });
         }
       }
     } catch (_) {}
@@ -1380,14 +1384,14 @@ const _handleSuccessfulPayment = async (booking, reference, amount) => {
     require('../utils/pushNotification').notifyPaymentConfirmation(client, booking);
     await inApp.create(client._id || client, { title: 'Payment Confirmed 🎉', message: `Full payment for booking #${booking.bookingNumber} confirmed. You're all set!`, notifType: 'payment_confirmation', relatedId: booking._id });
     if (client?.email) {
-      await sendFullPaymentConfirmationEmail(client.email, { firstName: client.firstName, bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, eventTime: booking.eventTime, serviceName: svc?.name, providerName: provider?.businessName || `${provider?.firstName||''} ${provider?.lastName||''}`.trim(), totalAmount: booking.pricing?.totalAmount, paymentPlan: booking.paymentPlan });
+      await sendFullPaymentConfirmationEmail(client.email, { firstName: client.firstName, bookingNumber: booking.bookingNumber, eventDate: booking.eventDate, eventTime: booking.eventTime, serviceName: svc?.name, providerName: provider?.businessName || `${provider?.firstName||''} ${provider?.lastName||''}`.trim(), totalAmount: booking.pricing?.totalAmount, paymentPlan: booking.paymentPlan, receipt: booking.receipt });
     }
     if (provider) {
       require('../utils/pushNotification').notifyPaymentReceived(provider, booking, 'full', amount || booking.pricing?.totalAmount);
       await inApp.create(provider._id, { title: 'Full Payment Received 💰', message: `Full payment of \u20A6${Number(booking.pricing?.totalAmount).toLocaleString()} received for booking #${booking.bookingNumber}.`, notifType: 'payment_confirmation', relatedId: booking._id });
       if (provider.email) {
         const clientName = client?.firstName ? `${client.firstName} ${client.lastName || ''}`.trim() : 'Client';
-        await sendPaymentReceivedEmail(provider.email, { firstName: provider.firstName, bookingNumber: booking.bookingNumber, clientName, paymentType: 'full', amount: amount || booking.pricing?.totalAmount, totalAmount: booking.pricing?.totalAmount, balanceDue: 0, eventDate: booking.eventDate });
+        await sendPaymentReceivedEmail(provider.email, { firstName: provider.firstName, bookingNumber: booking.bookingNumber, clientName, paymentType: 'full', amount: amount || booking.pricing?.totalAmount, totalAmount: booking.pricing?.totalAmount, balanceDue: 0, eventDate: booking.eventDate, receipt: booking.receipt });
       }
     }
   } catch (_) {}
