@@ -7,6 +7,7 @@ const express = require('express');
 const router = express.Router();
 const adminController = require('../controllers/adminController');
 const ext = require('../controllers/adminExtendedController');
+const { runDormancyCleaner } = require('../controllers/dormancyController');
 const { authenticate, authorize } = require('../middleware/auth');
 const { USER_ROLES } = require('../config/constants');
 const { createUploadMiddleware } = require('../utils/fileUpload');
@@ -122,5 +123,8 @@ router.get('/locations', ext.getLocations);
 router.post('/locations', ext.createLocation);
 router.put('/locations/:id', ext.updateLocation);
 router.delete('/locations/:id', ext.deleteLocation);
+
+// Chat and messaging management
+router.post('/maintenance/clear-dormant-chats', runDormancyCleaner);
 
 module.exports = router;

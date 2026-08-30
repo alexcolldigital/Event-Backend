@@ -52,6 +52,7 @@ const messageSchema = new mongoose.Schema(
       default: 'sent',
     },
     isDeleted: { type: Boolean, default: false },
+    lastActivityAt: { type: Date, default: Date.now, index: true },
   },
   { timestamps: true }
 );
@@ -62,4 +63,59 @@ messageSchema.statics.buildConversationId = function (userIdA, userIdB, bookingI
   return bookingId ? `${sorted}_${bookingId}` : sorted;
 };
 
-module.exports = mongoose.model('Message', messageSchema);
+// Create a new model for ChatSession to track conversation status and dormancy
+const chatSessionSchema = new mongoose.Schema(
+  {
+    conversationId: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+    },
+    participantA: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+    participantB: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+    booking: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Booking',
+      default: null,
+    },
+    lastActivityAt: {
+      type: Date,
+      default: Date.now,
+      index: true,
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+    endedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    endReason: {
+      type: String,
+      enum: ['user_satisfied', 'user_unsatisfied', 'want_follow_up', 'dormant'],
+      default: null,
+    },
+    satisfactionFeedback: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+  },
+  { timestamps: true }
+);
+
+const Message = mongoose.model('Message', messageSchema);
+const ChatSession = mongoose.model('ChatSession', chatSessionSchema);
+
+module.exports = { Message, ChatSession };

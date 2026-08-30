@@ -4,6 +4,7 @@
  */
 
 const Service = require('../models/Service');
+const Category = require('../models/Category');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { uploadToCloudinary } = require('../utils/fileUpload');
 const { sendServiceAddedEmail, sendServiceUpdatedEmail } = require('../utils/email');
@@ -18,8 +19,6 @@ const createService = asyncHandler(async (req, res) => {
   const {
     name,
     description,
-    shortDescription,
-    serviceType,
     category,
     subCategory,
     pricing,
@@ -30,13 +29,26 @@ const createService = asyncHandler(async (req, res) => {
     media,
     inventory,
     quantity,
-    fullDescription,
+    serviceType,
   } = req.body;
 
-  if (!name || !description || !serviceType) {
+  if (!name || !description) {
     return res.status(400).json({
       success: false,
-      message: 'Name, description, and service type are required',
+      message: 'Name and description are required',
+    });
+  }
+
+  const normalizedServiceType = serviceType || 'Professional Service';
+
+  // Validate category and subcategory
+  try {
+    const validatedCategory = await validateCategory(category, subCategory);
+    var categoryData = validatedCategory;
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.message,
     });
   }
 
@@ -46,11 +58,11 @@ const createService = asyncHandler(async (req, res) => {
 
   const service = new Service({
     name,
-    description: fullDescription || description,
-    shortDescription: shortDescription || description?.slice(0, 200),
-    serviceType,
-    category,
-    subCategory,
+    description,
+    shortDescription: description?.slice(0, 200),
+    serviceType: normalizedServiceType,
+    category: categoryData.category,
+    subCategory: categoryData.subCategory,
     provider: providerId,
     providerType,
     pricing: {
@@ -194,6 +206,22 @@ const updateService = asyncHandler(async (req, res) => {
       success: false,
       message: 'Not authorized to update this service',
     });
+  }
+
+  // Validate category and subcategory if they are being updated
+  if (req.body.category || req.body.subCategory) {
+    try {
+      const categoryToValidate = req.body.category || service.category;
+      const subCategoryToValidate = req.body.subCategory || service.subCategory;
+      const validatedCategory = await validateCategory(categoryToValidate, subCategoryToValidate);
+      req.body.category = validatedCategory.category;
+      req.body.subCategory = validatedCategory.subCategory;
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
   }
 
   service = await Service.findByIdAndUpdate(req.params.id, req.body, {
@@ -397,6 +425,75 @@ const getPublicStats = asyncHandler(async (req, res) => {
   });
 });
 
+/**
+ * Get all available categories with subcategories
+ * GET /api/services/categories/available
+ * Public endpoint - returns active categories that can be used in forms
+ */
+const getAvailableCategories = asyncHandler(async (req, res) => {
+  const categories = await Category.find({ isActive: true })
+    .select('_id name slug description icon parentCategory')
+    .sort({ sortOrder: 1, name: 1 })
+    .lean();
+
+  // Get parent categories
+  const parentCategories = categories.filter(cat => !cat.parentCategory);
+
+  // Get subcategories for each parent
+  const categoriesWithSubcategories = parentCategories.map(parent => ({
+    ...parent,
+    subcategories: categories.filter(cat => cat.parentCategory?.toString() === parent._id.toString()),
+  }));
+
+  res.status(200).json({
+    success: true,
+    categories: categoriesWithSubcategories,
+    total: categories.length,
+  });
+});
+
+/**
+ * Validate if a category exists and is active
+ * Helper function - validates category/subcategory
+ */
+const validateCategory = asyncHandler(async (category, subCategory) => {
+  if (!category) {
+    throw new Error('Category is required');
+  }
+
+  // Check if category exists and is active
+  const categoryDoc = await Category.findOne({
+    $or: [
+      { name: category, isActive: true },
+      { slug: category, isActive: true },
+      { _id: category, isActive: true },
+    ],
+  });
+
+  if (!categoryDoc) {
+    throw new Error(`Category "${category}" does not exist or is not available. Please select from available categories.`);
+  }
+
+  // If subcategory is provided, validate it exists as a child of the parent
+  if (subCategory) {
+    const subCategoryDoc = await Category.findOne({
+      $or: [
+        { name: subCategory, parentCategory: categoryDoc._id, isActive: true },
+        { slug: subCategory, parentCategory: categoryDoc._id, isActive: true },
+        { _id: subCategory, parentCategory: categoryDoc._id, isActive: true },
+      ],
+    });
+
+    if (!subCategoryDoc) {
+      throw new Error(`Subcategory "${subCategory}" is not valid for the selected category. Please select from available options.`);
+    }
+
+    return { categoryId: categoryDoc._id, category: categoryDoc.name, subCategoryId: subCategoryDoc._id, subCategory: subCategoryDoc.name };
+  }
+
+  return { categoryId: categoryDoc._id, category: categoryDoc.name, subCategory: null };
+});
+
 module.exports = {
   createService,
   getServices,
@@ -408,4 +505,6 @@ module.exports = {
   toggleAvailability,
   uploadServiceMedia,
   getPublicStats,
+  getAvailableCategories,
+  validateCategory,
 };

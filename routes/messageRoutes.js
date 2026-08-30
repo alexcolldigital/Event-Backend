@@ -28,6 +28,12 @@ router.patch('/conversation/:conversationId/read', authenticate, messageControll
 // Clear an entire chat conversation after provider/admin confirms no further questions
 router.delete('/conversation/:conversationId', authenticate, messageController.clearConversation);
 
+// End chat session with satisfaction check
+router.post('/conversation/:conversationId/end', authenticate, messageController.endChatSessionController);
+
+// Get chat session status with dormancy info
+router.get('/conversation/:conversationId/status', authenticate, messageController.getChatSessionStatus);
+
 // Delete a message
 router.delete('/:id', authenticate, messageController.deleteMessage);
 

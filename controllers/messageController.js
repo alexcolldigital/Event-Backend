@@ -1,4 +1,4 @@
-const Message = require('../models/Message');
+const { Message, ChatSession } = require('../models/Message');
 const Booking = require('../models/Booking');
 const User = require('../models/User');
 const { asyncHandler } = require('../middleware/errorHandler');
@@ -6,6 +6,11 @@ const { sanitizeChatMessage } = require('../utils/trust');
 const { uploadToCloudinary } = require('../utils/fileUpload');
 const push = require('../utils/pushNotification');
 const { sendNewMessageEmail } = require('../utils/email');
+const {
+  initializeChatSession,
+  endChatSession,
+  getChatSessionInfo,
+} = require('../utils/chatSession');
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -77,7 +82,11 @@ const sendMessage = asyncHandler(async (req, res) => {
     attachment: type !== 'text' ? attachment : undefined,
     readBy: [{ user: req.userId, readAt: new Date() }],
     status: 'sent',
+    lastActivityAt: new Date(),
   });
+
+  // Initialize or update chat session
+  await initializeChatSession(conversationId, req.userId, receiverId, bookingId);
 
   await message.populate('sender', 'firstName lastName profileImage role');
   await message.populate('receiver', 'firstName lastName profileImage role');
@@ -308,6 +317,89 @@ const clearConversation = asyncHandler(async (req, res) => {
   });
 });
 
+// ─── End chat session with satisfaction check ───────────────────────────────
+
+const endChatSessionController = asyncHandler(async (req, res) => {
+  const { conversationId } = req.params;
+  const { reason, feedback } = req.body;
+
+  if (!conversationId) {
+    return res.status(400).json({ success: false, message: 'conversationId is required' });
+  }
+
+  if (!reason || !['user_satisfied', 'user_unsatisfied', 'want_follow_up'].includes(reason)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Valid reason is required: user_satisfied, user_unsatisfied, or want_follow_up',
+    });
+  }
+
+  // Verify user is admin or service provider (can be either participant)
+  const [userA, userB] = conversationId.split('_');
+  const userIds = [userA, userB].filter(Boolean);
+  const isAuthorized = req.user.role === 'admin' || req.user.role === 'serviceProvider' || userIds.includes(String(req.userId));
+
+  if (!isAuthorized) {
+    return res.status(403).json({
+      success: false,
+      message: 'Only admin or service providers can end chat sessions',
+    });
+  }
+
+  // End the chat session
+  const session = await endChatSession(conversationId, req.userId, reason, feedback || null);
+
+  if (!session) {
+    return res.status(400).json({ success: false, message: 'Chat session not found' });
+  }
+
+  // Emit event to notify other participant
+  const io = req.app.get('io');
+  if (io) {
+    io.to(conversationId).emit('chat_session_ended', {
+      conversationId,
+      endedBy: req.userId,
+      reason,
+      feedback,
+      timestamp: new Date(),
+    });
+  }
+
+  res.status(200).json({
+    success: true,
+    message: 'Chat session ended',
+    data: session,
+  });
+});
+
+// ─── Get chat session info with dormancy status ──────────────────────────────
+
+const getChatSessionStatus = asyncHandler(async (req, res) => {
+  const { conversationId } = req.params;
+
+  if (!conversationId) {
+    return res.status(400).json({ success: false, message: 'conversationId is required' });
+  }
+
+  // Verify user belongs to this conversation
+  const [userA, userB] = conversationId.split('_');
+  const userIds = [userA, userB];
+  if (req.user.role !== 'admin' && !userIds.includes(String(req.userId))) {
+    return res.status(403).json({ success: false, message: 'Not authorized to view this session' });
+  }
+
+  const sessionInfo = await getChatSessionInfo(conversationId);
+
+  if (!sessionInfo) {
+    return res.status(404).json({ success: false, message: 'Chat session not found' });
+  }
+
+  res.status(200).json({
+    success: true,
+    data: sessionInfo,
+  });
+});
+
 module.exports = {
   sendMessage,
   getConversations,
@@ -316,4 +408,6 @@ module.exports = {
   markRead,
   deleteMessage,
   clearConversation,
+  endChatSessionController,
+  getChatSessionStatus,
 };

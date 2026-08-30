@@ -506,8 +506,6 @@ const createService = asyncHandler(async (req, res) => {
   const {
     name,
     description,
-    shortDescription,
-    serviceType,
     category,
     subCategory,
     pricing,
@@ -518,7 +516,6 @@ const createService = asyncHandler(async (req, res) => {
     media,
     inventory,
     quantity,
-    fullDescription,
     provider,
     providerType,
     isActive,
@@ -527,23 +524,26 @@ const createService = asyncHandler(async (req, res) => {
     specifications,
     cancellationPolicy,
     cancellationDetails,
+    serviceType,
   } = req.body;
 
-  if (!name || !description || !serviceType) {
+  if (!name || !description) {
     return res.status(400).json({
       success: false,
-      message: 'Name, description, and service type are required',
+      message: 'Name and description are required',
     });
   }
+
+  const normalizedServiceType = serviceType || 'Professional Service';
 
   // If provider is not specified, use a default admin user or require it
   const serviceProvider = (provider && provider.trim()) ? provider : req.userId;
 
   const service = new Service({
     name,
-    description: fullDescription || description,
-    shortDescription: shortDescription || description?.slice(0, 200),
-    serviceType,
+    description,
+    shortDescription: description?.slice(0, 200),
+    serviceType: normalizedServiceType,
     category,
     subCategory,
     provider: serviceProvider,

@@ -39,7 +39,7 @@ const serviceSchema = new mongoose.Schema(
     // Service Details
     serviceType: {
       type: String,
-      required: true,
+      default: 'Professional Service',
     },
     category: String,
     subCategory: String,

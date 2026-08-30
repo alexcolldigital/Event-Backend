@@ -12,6 +12,9 @@ const { createUploadMiddleware } = require('../utils/fileUpload');
 // Get public platform stats (public)
 router.get('/stats', serviceController.getPublicStats);
 
+// Get all available categories (public)
+router.get('/categories/available', serviceController.getAvailableCategories);
+
 // Get all services (public)
 router.get('/', serviceController.getServices);
 
