@@ -111,6 +111,16 @@ const chatSessionSchema = new mongoose.Schema(
       trim: true,
       default: null,
     },
+    // Mutual confirmation: both parties must confirm before messages are scheduled for deletion
+    endConfirmedBy: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    }],
+    scheduledDeleteAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
   },
   { timestamps: true }
 );

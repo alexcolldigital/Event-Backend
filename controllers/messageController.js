@@ -9,6 +9,7 @@ const { sendNewMessageEmail } = require('../utils/email');
 const {
   initializeChatSession,
   endChatSession,
+  confirmEndChatSession,
   getChatSessionInfo,
 } = require('../utils/chatSession');
 
@@ -400,6 +401,48 @@ const getChatSessionStatus = asyncHandler(async (req, res) => {
   });
 });
 
+// ─── Client confirms end of chat session ────────────────────────────────────
+
+const confirmEndChatSessionController = asyncHandler(async (req, res) => {
+  const { conversationId } = req.params;
+
+  if (!conversationId) {
+    return res.status(400).json({ success: false, message: 'conversationId is required' });
+  }
+
+  // Any participant can confirm
+  const [userA, userB] = conversationId.split('_');
+  const userIds = [userA, userB].filter(Boolean);
+  if (req.user.role !== 'admin' && !userIds.includes(String(req.userId))) {
+    return res.status(403).json({ success: false, message: 'Not authorized' });
+  }
+
+  const { session, bothConfirmed } = await confirmEndChatSession(conversationId, req.userId);
+
+  if (!session) {
+    return res.status(400).json({ success: false, message: 'Chat session not found or still active' });
+  }
+
+  const io = req.app.get('io');
+  if (io) {
+    io.to(conversationId).emit('chat_end_confirmed', {
+      conversationId,
+      confirmedBy: req.userId,
+      bothConfirmed,
+      scheduledDeleteAt: session.scheduledDeleteAt,
+    });
+  }
+
+  res.status(200).json({
+    success: true,
+    message: bothConfirmed
+      ? 'Both parties confirmed. Messages will be deleted in 24 hours.'
+      : 'Confirmation recorded. Waiting for the other party.',
+    bothConfirmed,
+    scheduledDeleteAt: session.scheduledDeleteAt,
+  });
+});
+
 module.exports = {
   sendMessage,
   getConversations,
@@ -409,5 +452,6 @@ module.exports = {
   deleteMessage,
   clearConversation,
   endChatSessionController,
+  confirmEndChatSessionController,
   getChatSessionStatus,
 };

@@ -31,6 +31,9 @@ router.delete('/conversation/:conversationId', authenticate, messageController.c
 // End chat session with satisfaction check
 router.post('/conversation/:conversationId/end', authenticate, messageController.endChatSessionController);
 
+// Confirm end of chat session (client confirms)
+router.post('/conversation/:conversationId/confirm-end', authenticate, messageController.confirmEndChatSessionController);
+
 // Get chat session status with dormancy info
 router.get('/conversation/:conversationId/status', authenticate, messageController.getChatSessionStatus);
 

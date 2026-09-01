@@ -38,11 +38,7 @@ async function initializeChatSession(conversationId, participantA, participantB,
 }
 
 /**
- * Mark a chat session as ended by admin/service provider
- * @param {String} conversationId - The conversation ID
- * @param {String} userId - User ID of the person ending the session
- * @param {String} reason - Reason for ending: 'user_satisfied', 'user_unsatisfied', 'want_follow_up'
- * @param {String} feedback - Optional feedback message
+ * Mark a chat session as ended by admin/service provider (awaits client confirmation)
  */
 async function endChatSession(conversationId, userId, reason, feedback = null) {
   try {
@@ -54,6 +50,7 @@ async function endChatSession(conversationId, userId, reason, feedback = null) {
         endReason: reason,
         satisfactionFeedback: feedback,
         lastActivityAt: new Date(),
+        $addToSet: { endConfirmedBy: userId },
       },
       { new: true }
     );
@@ -61,6 +58,41 @@ async function endChatSession(conversationId, userId, reason, feedback = null) {
   } catch (error) {
     console.error('Error ending chat session:', error);
     return null;
+  }
+}
+
+/**
+ * Confirm end of chat session by the other party (client).
+ * Once both parties confirm, schedules messages for deletion in 24 hours.
+ * @param {String} conversationId
+ * @param {String} userId - The confirming user's ID
+ * @returns {{ session, bothConfirmed }}
+ */
+async function confirmEndChatSession(conversationId, userId) {
+  try {
+    const session = await ChatSession.findOne({ conversationId });
+    if (!session || session.isActive) return { session: null, bothConfirmed: false };
+
+    // Add this user's confirmation
+    await ChatSession.updateOne(
+      { conversationId },
+      { $addToSet: { endConfirmedBy: userId } }
+    );
+
+    const updated = await ChatSession.findOne({ conversationId });
+    const participants = [String(updated.participantA), String(updated.participantB)];
+    const confirmed = (updated.endConfirmedBy || []).map(String);
+    const bothConfirmed = participants.every((p) => confirmed.includes(p));
+
+    if (bothConfirmed && !updated.scheduledDeleteAt) {
+      updated.scheduledDeleteAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      await updated.save();
+    }
+
+    return { session: updated, bothConfirmed };
+  } catch (error) {
+    console.error('Error confirming end chat session:', error);
+    return { session: null, bothConfirmed: false };
   }
 }
 
@@ -141,6 +173,8 @@ async function getChatSessionInfo(conversationId) {
       endedBy: session.endedBy,
       endReason: session.endReason,
       satisfactionFeedback: session.satisfactionFeedback,
+      endConfirmedBy: session.endConfirmedBy || [],
+      scheduledDeleteAt: session.scheduledDeleteAt || null,
       dormancyWarning: session.isActive 
         ? calculateDormancyWarning(session.lastActivityAt)
         : null,
@@ -171,6 +205,7 @@ function calculateDormancyWarning(lastActivityAt) {
 module.exports = {
   initializeChatSession,
   endChatSession,
+  confirmEndChatSession,
   clearDormantSessions,
   getChatSessionInfo,
   calculateDormancyWarning,

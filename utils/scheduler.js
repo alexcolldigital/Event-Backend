@@ -1,4 +1,5 @@
 const Booking = require('../models/Booking');
+const { Message, ChatSession } = require('../models/Message');
 const PlatformSetting = require('../models/PlatformSetting');
 const gateway = require('./gateway');
 const Payout = require('../models/Payout');
@@ -228,17 +229,39 @@ const processBalanceDueReminders = async () => {
   }
 };
 
+const processScheduledChatDeletions = async () => {
+  try {
+    const now = new Date();
+    const sessions = await ChatSession.find({
+      scheduledDeleteAt: { $lte: now },
+      isActive: false,
+    });
+
+    for (const session of sessions) {
+      await Message.deleteMany({ conversationId: session.conversationId });
+      // Clear the scheduledDeleteAt so it doesn't re-run
+      session.scheduledDeleteAt = null;
+      await session.save();
+      console.log(`[Scheduler] Deleted messages for conversation ${session.conversationId}`);
+    }
+  } catch (err) {
+    console.error('processScheduledChatDeletions error', err);
+  }
+};
+
 const startSchedulers = (intervalMinutes = 15) => {
   processExpiredAcceptances();
   processAutoReleases();
   processBookingReminders();
   processBalanceDueReminders();
+  processScheduledChatDeletions();
 
   setInterval(() => {
     processExpiredAcceptances();
     processAutoReleases();
     processBookingReminders();
     processBalanceDueReminders();
+    processScheduledChatDeletions();
   }, intervalMinutes * 60 * 1000);
 };
 
@@ -247,5 +270,6 @@ module.exports = {
   processAutoReleases,
   processBookingReminders,
   processBalanceDueReminders,
+  processScheduledChatDeletions,
   startSchedulers,
 };
